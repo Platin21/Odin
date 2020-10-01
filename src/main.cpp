@@ -340,12 +340,12 @@ i32 linker_stage(lbGenerator *gen) {
 					// framework thingie
 					String lib_name = lib;
 					lib_name = remove_extension_from_path(lib_name);
-					lib_str = gb_string_append_fmt(lib_str, " -framework %.*s ", LIT(lib_name));
-				} else if (string_ends_with(lib, str_lit(".a"))) {
+					lib_str = gb_string_append_fmt(lib_str, " -framework %.*s ", LIT(lib_name));  
+				} else if (string_ends_with(lib, str_lit(".a")) || 
+                   string_ends_with(lib, str_lit(".o")) || 
+                   string_ends_with(lib, str_lit(".dylib"))) 
+        {
 					// static libs, absolute full path relative to the file in which the lib was imported from
-					lib_str = gb_string_append_fmt(lib_str, " %.*s ", LIT(lib));
-				} else if (string_ends_with(lib, str_lit(".dylib"))) {
-					// dynamic lib
 					lib_str = gb_string_append_fmt(lib_str, " %.*s ", LIT(lib));
 				} else {
 					// dynamic or static system lib, just link regularly searching system library paths
