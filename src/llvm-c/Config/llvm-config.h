@@ -7,6 +7,8 @@
 /*                                                                            */
 /*===----------------------------------------------------------------------===*/
 
+#include <gb/gb.h>
+
 /* This file enumerates variables from the LLVM configuration so that they
    can be in exported headers and won't override package specific directives.
    This is a C header that can be included in the llvm-c headers. */
@@ -21,7 +23,13 @@
 /* #undef LINK_POLLY_INTO_TOOLS */
 
 /* Target triple LLVM will generate code for by default */
+#if defined(GB_SYSTEM_WINDOWS)
 #define LLVM_DEFAULT_TARGET_TRIPLE "x86_64-pc-windows-msvc"
+#elif defined(GB_SYSTEM_OSX)
+#define LLVM_DEFAULT_TARGET_TRIPLE "x86_64-apple-darwin20.1.0"
+#else
+#define LLVM_HOST_TRIPLE "x86_64-unix-linux"
+#endif
 
 /* Define if threads enabled */
 #define LLVM_ENABLE_THREADS 1
@@ -30,7 +38,13 @@
 #define LLVM_HAS_ATOMICS 1
 
 /* Host triple LLVM will be executed on */
+#if defined(GB_SYSTEM_WINDOWS)
 #define LLVM_HOST_TRIPLE "x86_64-pc-windows-msvc"
+#elif defined(GB_SYSTEM_OSX)
+#define LLVM_HOST_TRIPLE "x86_64-apple-darwin20.1.0"
+#else
+#define LLVM_HOST_TRIPLE "x86_64-unix-linux"
+#endif
 
 /* LLVM architecture name for the native architecture, if available */
 #define LLVM_NATIVE_ARCH X86
