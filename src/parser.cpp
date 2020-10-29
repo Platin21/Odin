@@ -45,6 +45,7 @@ Token ast_token(Ast *node) {
 	case Ast_TypeAssertion:      return ast_token(node->TypeAssertion.expr);
 	case Ast_TypeCast:           return node->TypeCast.token;
 	case Ast_AutoCast:           return node->AutoCast.token;
+	case Ast_InlineAsmExpr:      return node->InlineAsmExpr.token;
 
 	case Ast_BadStmt:            return node->BadStmt.begin;
 	case Ast_EmptyStmt:          return node->EmptyStmt.token;
@@ -230,6 +231,13 @@ Ast *clone_ast(Ast *node) {
 		break;
 	case Ast_AutoCast:
 		n->AutoCast.expr = clone_ast(n->AutoCast.expr);
+		break;
+
+	case Ast_InlineAsmExpr:
+		n->InlineAsmExpr.param_types        = clone_ast_array(n->InlineAsmExpr.param_types);
+		n->InlineAsmExpr.return_type        = clone_ast(n->InlineAsmExpr.return_type);
+		n->InlineAsmExpr.asm_string         = clone_ast(n->InlineAsmExpr.asm_string);
+		n->InlineAsmExpr.constraints_string = clone_ast(n->InlineAsmExpr.constraints_string);
 		break;
 
 	case Ast_BadStmt:   break;
@@ -715,6 +723,28 @@ Ast *ast_auto_cast(AstFile *f, Token token, Ast *expr) {
 	return result;
 }
 
+Ast *ast_inline_asm_expr(AstFile *f, Token token, Token open, Token close,
+                         Array<Ast *> const &param_types,
+                         Ast *return_type,
+                         Ast *asm_string,
+                         Ast *constraints_string,
+                         bool has_side_effects,
+                         bool is_align_stack,
+                         InlineAsmDialectKind dialect) {
+
+	Ast *result = alloc_ast_node(f, Ast_InlineAsmExpr);
+	result->InlineAsmExpr.token              = token;
+	result->InlineAsmExpr.open               = open;
+	result->InlineAsmExpr.close              = close;
+	result->InlineAsmExpr.param_types        = param_types;
+	result->InlineAsmExpr.return_type        = return_type;
+	result->InlineAsmExpr.asm_string         = asm_string;
+	result->InlineAsmExpr.constraints_string = constraints_string;
+	result->InlineAsmExpr.has_side_effects   = has_side_effects;
+	result->InlineAsmExpr.is_align_stack     = is_align_stack;
+	result->InlineAsmExpr.dialect            = dialect;
+	return result;
+}
 
 
 
@@ -1732,6 +1762,15 @@ void check_polymorphic_params_for_type(AstFile *f, Ast *polymorphic_params, Toke
 	}
 }
 
+bool ast_on_same_line(Token const &x, Ast *yp) {
+	Token y = ast_token(yp);
+	return x.pos.line == y.pos.line;
+}
+
+bool ast_on_same_line(Ast *x, Ast *y) {
+	return ast_on_same_line(ast_token(x), y);
+}
+
 
 Ast *parse_operand(AstFile *f, bool lhs) {
 	Ast *operand = nullptr; // Operand
@@ -2000,6 +2039,8 @@ Ast *parse_operand(AstFile *f, bool lhs) {
 
 			if (build_context.disallow_do) {
 				syntax_error(body, "'do' has been disallowed");
+			} else if (!ast_on_same_line(type, body)) {
+				syntax_error(body, "The body of a 'do' be on the same line as the signature");
 			}
 
 			return ast_proc_lit(f, type, body, tags, where_token, where_clauses);
@@ -2303,6 +2344,80 @@ Ast *parse_operand(AstFile *f, bool lhs) {
 
 		expect_token(f, Token_CloseBracket);
 		return ast_bit_set_type(f, token, elem, underlying);
+	}
+
+	case Token_asm: {
+		Token token = expect_token(f, Token_asm);
+
+		Array<Ast *> param_types = {};
+		Ast *return_type = nullptr;
+		if (allow_token(f, Token_OpenParen)) {
+			param_types = array_make<Ast *>(heap_allocator());
+			while (f->curr_token.kind != Token_CloseParen && f->curr_token.kind != Token_EOF) {
+				Ast *t = parse_type(f);
+				array_add(&param_types, t);
+				if (f->curr_token.kind != Token_Comma ||
+				    f->curr_token.kind == Token_EOF) {
+				    break;
+				}
+				advance_token(f);
+			}
+			expect_token(f, Token_CloseParen);
+
+			if (allow_token(f, Token_ArrowRight)) {
+				return_type = parse_type(f);
+			}
+		}
+
+		bool has_side_effects = false;
+		bool is_align_stack = false;
+		InlineAsmDialectKind dialect = InlineAsmDialect_Default;
+
+		while (f->curr_token.kind == Token_Hash) {
+			advance_token(f);
+			if (f->curr_token.kind == Token_Ident) {
+				Token token = advance_token(f);
+				String name = token.string;
+				if (name == "side_effects") {
+					if (has_side_effects) {
+						syntax_error(token, "Duplicate directive on inline asm expression: '#side_effects'");
+					}
+					has_side_effects = true;
+				} else if (name == "align_stack") {
+					if (is_align_stack) {
+						syntax_error(token, "Duplicate directive on inline asm expression: '#align_stack'");
+					}
+					is_align_stack = true;
+				} else if (name == "att") {
+					if (dialect == InlineAsmDialect_ATT) {
+						syntax_error(token, "Duplicate directive on inline asm expression: '#att'");
+					} else if (dialect != InlineAsmDialect_Default) {
+						syntax_error(token, "Conflicting asm dialects");
+					} else {
+						dialect = InlineAsmDialect_ATT;
+					}
+				} else if (name == "intel") {
+					if (dialect == InlineAsmDialect_Intel) {
+						syntax_error(token, "Duplicate directive on inline asm expression: '#intel'");
+					} else if (dialect != InlineAsmDialect_Default) {
+						syntax_error(token, "Conflicting asm dialects");
+					} else {
+						dialect = InlineAsmDialect_Intel;
+					}
+				}
+			} else {
+				syntax_error(f->curr_token, "Expected an identifier after hash");
+			}
+		}
+
+		Token open = expect_token(f, Token_OpenBrace);
+		Ast *asm_string = parse_expr(f, false);
+		expect_token(f, Token_Comma);
+		Ast *constraints_string = parse_expr(f, false);
+		allow_token(f, Token_Comma);
+		Token close = expect_token(f, Token_CloseBrace);
+
+		return ast_inline_asm_expr(f, token, open, close, param_types, return_type, asm_string, constraints_string, has_side_effects, is_align_stack, dialect);
 	}
 
 	default: {
@@ -3564,6 +3679,8 @@ Ast *parse_if_stmt(AstFile *f) {
 		body = convert_stmt_to_body(f, parse_stmt(f));
 		if (build_context.disallow_do) {
 			syntax_error(body, "'do' has been disallowed");
+		} else if (!ast_on_same_line(cond, body)) {
+			syntax_error(body, "The body of a 'do' be on the same line as if condition");
 		}
 	} else {
 		body = parse_block_stmt(f, false);
@@ -3582,6 +3699,8 @@ Ast *parse_if_stmt(AstFile *f) {
 			else_stmt = convert_stmt_to_body(f, parse_stmt(f));
 			if (build_context.disallow_do) {
 				syntax_error(else_stmt, "'do' has been disallowed");
+			} else if (!ast_on_same_line(cond, body)) {
+				syntax_error(body, "The body of a 'do' be on the same line as 'else'");
 			}
 		} break;
 		default:
@@ -3615,6 +3734,8 @@ Ast *parse_when_stmt(AstFile *f) {
 		body = convert_stmt_to_body(f, parse_stmt(f));
 		if (build_context.disallow_do) {
 			syntax_error(body, "'do' has been disallowed");
+		} else if (!ast_on_same_line(cond, body)) {
+			syntax_error(body, "The body of a 'do' be on the same line as when statement");
 		}
 	} else {
 		body = parse_block_stmt(f, true);
@@ -3633,6 +3754,8 @@ Ast *parse_when_stmt(AstFile *f) {
 			else_stmt = convert_stmt_to_body(f, parse_stmt(f));
 			if (build_context.disallow_do) {
 				syntax_error(else_stmt, "'do' has been disallowed");
+			} else if (!ast_on_same_line(cond, body)) {
+				syntax_error(body, "The body of a 'do' be on the same line as 'else'");
 			}
 		} break;
 		default:
@@ -3716,6 +3839,8 @@ Ast *parse_for_stmt(AstFile *f) {
 				body = convert_stmt_to_body(f, parse_stmt(f));
 				if (build_context.disallow_do) {
 					syntax_error(body, "'do' has been disallowed");
+				} else if (!ast_on_same_line(token, body)) {
+					syntax_error(body, "The body of a 'do' be on the same line as the 'for' token");
 				}
 			} else {
 				body = parse_block_stmt(f, false);
@@ -3749,6 +3874,8 @@ Ast *parse_for_stmt(AstFile *f) {
 		body = convert_stmt_to_body(f, parse_stmt(f));
 		if (build_context.disallow_do) {
 			syntax_error(body, "'do' has been disallowed");
+		} else if (!ast_on_same_line(token, body)) {
+			syntax_error(body, "The body of a 'do' be on the same line as the 'for' token");
 		}
 	} else {
 		body = parse_block_stmt(f, false);
@@ -4096,6 +4223,8 @@ Ast *parse_stmt(AstFile *f) {
 				body = convert_stmt_to_body(f, parse_stmt(f));
 				if (build_context.disallow_do) {
 					syntax_error(body, "'do' has been disallowed");
+				} else if (!ast_on_same_line(for_token, body)) {
+					syntax_error(body, "The body of a 'do' be on the same line as the 'for' token");
 				}
 			} else {
 				body = parse_block_stmt(f, false);
@@ -4117,6 +4246,7 @@ Ast *parse_stmt(AstFile *f) {
 	case Token_String:
 	case Token_OpenParen:
 	case Token_Pointer:
+	case Token_asm: // Inline assembly
 	// Unary Operators
 	case Token_Add:
 	case Token_Sub:
@@ -4405,6 +4535,7 @@ void destroy_parser(Parser *p) {
 			destroy_ast_file(pkg->files[j]);
 		}
 		array_free(&pkg->files);
+		array_free(&pkg->foreign_files);
 	}
 #if 0
 	for_array(i, p->package_imports) {
@@ -4457,6 +4588,45 @@ void parser_add_file_to_process(Parser *p, AstPackage *pkg, FileInfo fi, TokenPo
 	thread_pool_add_task(&parser_thread_pool, parser_worker_proc, wd);
 }
 
+WORKER_TASK_PROC(foreign_file_worker_proc) {
+	ForeignFileWorkerData *wd = cast(ForeignFileWorkerData *)data;
+	Parser *p = wd->parser;
+	ImportedFile *imp = &wd->imported_file;
+	AstPackage *pkg = imp->pkg;
+
+	AstForeignFile foreign_file = {wd->foreign_kind};
+
+	String fullpath = string_trim_whitespace(imp->fi.fullpath); // Just in case
+
+	char *c_str = alloc_cstring(heap_allocator(), fullpath);
+	defer (gb_free(heap_allocator(), c_str));
+
+	gbFileContents fc = gb_file_read_contents(heap_allocator(), true, c_str);
+	foreign_file.source.text = (u8 *)fc.data;
+	foreign_file.source.len = fc.size;
+
+	switch (wd->foreign_kind) {
+	case AstForeignFile_S:
+		// TODO(bill): Actually do something with it
+		break;
+	}
+	gb_mutex_lock(&p->file_add_mutex);
+	array_add(&pkg->foreign_files, foreign_file);
+	gb_mutex_unlock(&p->file_add_mutex);
+	return 0;
+}
+
+
+void parser_add_foreign_file_to_process(Parser *p, AstPackage *pkg, AstForeignFileKind kind, FileInfo fi, TokenPos pos) {
+	// TODO(bill): Use a better allocator
+	ImportedFile f = {pkg, fi, pos, p->file_to_process_count++};
+	auto wd = gb_alloc_item(heap_allocator(), ForeignFileWorkerData);
+	wd->parser = p;
+	wd->imported_file = f;
+	wd->foreign_kind = kind;
+	thread_pool_add_task(&parser_thread_pool, foreign_file_worker_proc, wd);
+}
+
 
 // NOTE(bill): Returns true if it's added
 bool try_add_import_path(Parser *p, String const &path, String const &rel_path, TokenPos pos, PackageKind kind = Package_Normal) {
@@ -4479,15 +4649,18 @@ bool try_add_import_path(Parser *p, String const &path, String const &rel_path, 
 	pkg->kind = kind;
 	pkg->fullpath = path;
 	array_init(&pkg->files, heap_allocator());
+	pkg->foreign_files.allocator = heap_allocator();
 
 	// NOTE(bill): Single file initial package
 	if (kind == Package_Init && string_ends_with(path, FILE_EXT)) {
+
 		FileInfo fi = {};
 		fi.name = filename_from_path(path);
 		fi.fullpath = path;
 		fi.size = get_file_size(path);
 		fi.is_dir = false;
 
+		pkg->is_single_file = true;
 		parser_add_file_to_process(p, pkg, fi, pos);
 		parser_add_package(p, pkg);
 		return true;
@@ -4527,11 +4700,17 @@ bool try_add_import_path(Parser *p, String const &path, String const &rel_path, 
 	for_array(list_index, list) {
 		FileInfo fi = list[list_index];
 		String name = fi.name;
-		if (string_ends_with(name, FILE_EXT)) {
+		String ext = path_extension(name);
+		if (ext == FILE_EXT) {
 			if (is_excluded_target_filename(name)) {
 				continue;
 			}
 			parser_add_file_to_process(p, pkg, fi, pos);
+		} else if (ext == ".S" || ext ==".s") {
+			if (is_excluded_target_filename(name)) {
+				continue;
+			}
+			parser_add_foreign_file_to_process(p, pkg, AstForeignFile_S, fi, pos);
 		}
 	}
 
@@ -4841,27 +5020,33 @@ bool parse_build_tag(Token token_for_pos, String s) {
 				}
 			}
 
-			if (p.len > 0) {
-				TargetOsKind   os   = get_target_os_from_string(p);
-				TargetArchKind arch = get_target_arch_from_string(p);
-				if (os != TargetOs_Invalid) {
-					GB_ASSERT(arch == TargetArch_Invalid);
-					if (is_notted) {
-						this_kind_correct = this_kind_correct && (os != build_context.metrics.os);
-					} else {
-						this_kind_correct = this_kind_correct && (os == build_context.metrics.os);
-					}
-				} else if (arch != TargetArch_Invalid) {
-					if (is_notted) {
-						this_kind_correct = this_kind_correct && (arch != build_context.metrics.arch);
-					} else {
-						this_kind_correct = this_kind_correct && (arch == build_context.metrics.arch);
-					}
+			if (p.len == 0) {
+				continue;
+			}
+			if (p == "ignore") {
+				this_kind_correct = false;
+				continue;
+			}
+
+			TargetOsKind   os   = get_target_os_from_string(p);
+			TargetArchKind arch = get_target_arch_from_string(p);
+			if (os != TargetOs_Invalid) {
+				GB_ASSERT(arch == TargetArch_Invalid);
+				if (is_notted) {
+					this_kind_correct = this_kind_correct && (os != build_context.metrics.os);
+				} else {
+					this_kind_correct = this_kind_correct && (os == build_context.metrics.os);
 				}
-				if (os == TargetOs_Invalid && arch == TargetArch_Invalid) {
-					syntax_error(token_for_pos, "Invalid build tag platform: %.*s", LIT(p));
-					break;
+			} else if (arch != TargetArch_Invalid) {
+				if (is_notted) {
+					this_kind_correct = this_kind_correct && (arch != build_context.metrics.arch);
+				} else {
+					this_kind_correct = this_kind_correct && (arch == build_context.metrics.arch);
 				}
+			}
+			if (os == TargetOs_Invalid && arch == TargetArch_Invalid) {
+				syntax_error(token_for_pos, "Invalid build tag platform: %.*s", LIT(p));
+				break;
 			}
 		} while (s.len > 0);
 
@@ -4917,7 +5102,7 @@ bool parse_file(Parser *p, AstFile *f) {
 	}
 	f->package_name = package_name.string;
 
-	if (docs != nullptr && docs->list.count > 0) {
+	if (!f->pkg->is_single_file && docs != nullptr && docs->list.count > 0) {
 		for_array(i, docs->list) {
 			Token tok = docs->list[i]; GB_ASSERT(tok.kind == Token_Comment);
 			String str = tok.string;
@@ -4971,7 +5156,6 @@ ParseFileError process_imported_file(Parser *p, ImportedFile const &imported_fil
 
 	AstFile *file = gb_alloc_item(heap_allocator(), AstFile);
 	file->pkg = pkg;
-
 	file->id = imported_file.index+1;
 
 	TokenPos err_pos = {0};

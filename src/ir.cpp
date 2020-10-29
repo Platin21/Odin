@@ -1623,6 +1623,7 @@ irDefer ir_add_defer_proc(irProcedure *proc, isize scope_index, irValue *deferre
 	return d;
 }
 
+irValue *ir_add_module_constant(irModule *m, Type *type, ExactValue value);
 
 irValue *ir_check_compound_lit_constant(irModule *m, Ast *expr) {
 	expr = unparen_expr(expr);
@@ -1644,6 +1645,14 @@ irValue *ir_check_compound_lit_constant(irModule *m, Ast *expr) {
 	if (expr->kind == Ast_ProcLit) {
 		return ir_gen_anonymous_proc_lit(m, str_lit("_proclit"), expr);
 	}
+
+	if (expr->kind == Ast_Ident || expr->kind == Ast_SelectorExpr) {
+		TypeAndValue tav = type_and_value_of_expr(expr);
+		if (tav.mode == Addressing_Constant) {
+			return ir_add_module_constant(m, tav.type, tav.value);
+		}
+	}
+
 	return 	nullptr;
 }
 
@@ -4495,18 +4504,25 @@ irValue *ir_emit_arith(irProcedure *proc, TokenKind op, irValue *left, irValue *
 		if (inline_array_arith) {
 			// inline
 			for (i32 i = 0; i < count; i++) {
-				irValue *x = ir_emit_load(proc, ir_emit_array_epi(proc, lhs, i));
-				irValue *y = ir_emit_load(proc, ir_emit_array_epi(proc, rhs, i));
+				irValue *x_ptr = ir_emit_array_epi(proc, lhs, i);
+				irValue *y_ptr = ir_emit_array_epi(proc, rhs, i);
+				irValue *dst_ptr = ir_emit_array_epi(proc, res, i);
+				irValue *x = ir_emit_load(proc, x_ptr);
+				irValue *y = ir_emit_load(proc, y_ptr);
 				irValue *z = ir_emit_arith(proc, op, x, y, elem_type);
-				ir_emit_store(proc, ir_emit_array_epi(proc, res, i), z);
+				ir_emit_store(proc, dst_ptr, z);
 			}
 		} else {
 			auto loop_data = ir_loop_start(proc, count, t_i32);
 
-			irValue *x = ir_emit_load(proc, ir_emit_array_ep(proc, lhs, loop_data.idx));
-			irValue *y = ir_emit_load(proc, ir_emit_array_ep(proc, rhs, loop_data.idx));
+			irValue *x_ptr = ir_emit_array_ep(proc, lhs, loop_data.idx);
+			irValue *y_ptr = ir_emit_array_ep(proc, rhs, loop_data.idx);
+			irValue *dst_ptr = ir_emit_array_ep(proc, res, loop_data.idx);
+
+			irValue *x = ir_emit_load(proc, x_ptr);
+			irValue *y = ir_emit_load(proc, y_ptr);
 			irValue *z = ir_emit_arith(proc, op, x, y, elem_type);
-			ir_emit_store(proc, ir_emit_array_ep(proc, res, loop_data.idx), z);
+			ir_emit_store(proc, dst_ptr, z);
 
 			ir_loop_end(proc, loop_data);
 		}
@@ -11289,30 +11305,30 @@ void ir_begin_procedure_body(irProcedure *proc) {
 	if (proc->type->Proc.has_named_results) {
 		GB_ASSERT(proc->type->Proc.result_count > 0);
 		TypeTuple *results = &proc->type->Proc.results->Tuple;
+
 		for_array(i, results->variables) {
 			Entity *e = results->variables[i];
-			if (e->kind != Entity_Variable) {
-				continue;
-			}
+			GB_ASSERT(e->kind == Entity_Variable);
 
 			if (e->token.string != "") {
 				GB_ASSERT(!is_blank_ident(e->token));
-				irValue *res = ir_add_local(proc, e, e->identifier, true);
 
-				irValue *c = nullptr;
-				switch (e->Variable.param_value.kind) {
-				case ParameterValue_Constant:
-					c = ir_value_constant(e->type, e->Variable.param_value.value);
-					break;
-				case ParameterValue_Nil:
-					c = ir_value_nil(e->type);
-					break;
-				case ParameterValue_Location:
-					GB_PANIC("ParameterValue_Location");
-					break;
+				irAddr res = {};
+				if (proc->type->Proc.return_by_pointer) {
+					irValue *ptr = proc->return_ptr;
+					if (results->variables.count != 1) {
+						ptr = ir_emit_struct_ep(proc, ptr, cast(i32)i);
+					}
+
+					res = ir_addr(ptr);
+					ir_module_add_value(proc->module, e, ptr);
+				} else {
+					res = ir_addr(ir_add_local(proc, e, e->identifier, true));
 				}
-				if (c != nullptr) {
-					ir_emit_store(proc, res, c);
+
+				if (e->Variable.param_value.kind != ParameterValue_Invalid) {
+					irValue *c = ir_handle_param_value(proc, e->type, e->Variable.param_value, e->token.pos);
+					ir_addr_store(proc, res, c);
 				}
 			}
 		}

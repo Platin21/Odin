@@ -323,9 +323,6 @@ Context :: struct {
 }
 
 
-
-@thread_local global_default_temp_allocator_data: Default_Temp_Allocator;
-
 Raw_String :: struct {
 	data: ^byte,
 	len:  int,
@@ -523,6 +520,8 @@ __init_context :: proc "contextless" (c: ^Context) {
 	c.logger.procedure = default_logger_proc;
 	c.logger.data = nil;
 }
+
+@thread_local global_default_temp_allocator_data: Default_Temp_Allocator;
 
 @builtin
 init_global_temporary_allocator :: proc(size: int, backup_allocator := context.allocator) {
@@ -1067,6 +1066,14 @@ append_string :: proc(array: ^$T/[dynamic]$E/u8, args: ..string, loc := #caller_
 
 @builtin append :: proc{append_elem, append_elems, append_elem_string};
 @builtin append_soa :: proc{append_soa_elem, append_soa_elems};
+
+@builtin
+append_nothing :: proc(array: ^$T/[dynamic]$E, loc := #caller_location) {
+	if array == nil {
+		return;
+	}
+	resize(array, len(array)+1);
+}
 
 
 @builtin

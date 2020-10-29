@@ -124,7 +124,7 @@ clean :: proc(path: string, allocator := context.allocator) -> string {
 
 	r, dot_dot := 0, 0;
 	if rooted {
-		lazy_buffer_append(out, '/');
+		lazy_buffer_append(out, SEPARATOR);
 		r, dot_dot = 1, 1;
 	}
 
@@ -144,7 +144,7 @@ clean :: proc(path: string, allocator := context.allocator) -> string {
 				}
 			case !rooted:
 				if out.w > 0 {
-					lazy_buffer_append(out, '/');
+					lazy_buffer_append(out, SEPARATOR);
 				}
 				lazy_buffer_append(out, '.');
 				lazy_buffer_append(out, '.');
@@ -152,7 +152,7 @@ clean :: proc(path: string, allocator := context.allocator) -> string {
 			}
 		case:
 			if rooted && out.w != 1 || !rooted && out.w != 0 {
-				lazy_buffer_append(out, '/');
+				lazy_buffer_append(out, SEPARATOR);
 			}
 			for ; r < n && !is_separator(path[r]); r += 1 {
 				lazy_buffer_append(out, path[r]);
@@ -241,7 +241,7 @@ rel :: proc(base_path, target_path: string, allocator := context.allocator) -> (
 		for ti < tl && target[ti] != SEPARATOR {
 			ti += 1;
 		}
-		if !strings.equal_fold(target[t0:ti], base[t0:ti]) {
+		if !strings.equal_fold(target[t0:ti], base[b0:bi]) {
 			break;
 		}
 		if bi < bl {
@@ -284,7 +284,7 @@ rel :: proc(base_path, target_path: string, allocator := context.allocator) -> (
 dir :: proc(path: string, allocator := context.allocator) -> string {
 	vol := volume_name(path);
 	i := len(path) - 1;
-	for i >= len(vol) && is_separator(path[i]) {
+	for i >= len(vol) && !is_separator(path[i]) {
 		i -= 1;
 	}
 	dir := clean(path[len(vol) : i+1], allocator);

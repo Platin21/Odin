@@ -2209,7 +2209,7 @@ Type *type_to_abi_compat_param_type(gbAllocator a, Type *original_type, ProcCall
 		return new_type;
 	}
 
-	if (cc == ProcCC_None || cc == ProcCC_PureNone) {
+	if (cc == ProcCC_None || cc == ProcCC_PureNone || cc == ProcCC_InlineAsm) {
 		return new_type;
 	}
 
@@ -2318,15 +2318,6 @@ Type *type_to_abi_compat_param_type(gbAllocator a, Type *original_type, ProcCall
 	return new_type;
 }
 
-Type *reduce_tuple_to_single_type(Type *original_type) {
-	if (original_type != nullptr) {
-		Type *t = core_type(original_type);
-		if (t->kind == Type_Tuple && t->Tuple.variables.count == 1) {
-			return t->Tuple.variables[0]->type;
-		}
-	}
-	return original_type;
-}
 
 Type *type_to_abi_compat_result_type(gbAllocator a, Type *original_type, ProcCallingConvention cc) {
 	Type *new_type = original_type;
@@ -2337,9 +2328,14 @@ Type *type_to_abi_compat_result_type(gbAllocator a, Type *original_type, ProcCal
 
 	Type *single_type = reduce_tuple_to_single_type(original_type);
 
+	if (cc == ProcCC_InlineAsm) {
+		return new_type;
+	}
+
 	if (is_type_simd_vector(single_type)) {
 		return new_type;
 	}
+
 
 	if (build_context.ODIN_OS == "windows") {
 		if (build_context.ODIN_ARCH == "amd64") {
@@ -2410,7 +2406,7 @@ bool abi_compat_return_by_pointer(gbAllocator a, ProcCallingConvention cc, Type 
 	if (abi_return_type == nullptr) {
 		return false;
 	}
-	if (cc == ProcCC_None || cc == ProcCC_PureNone) {
+	if (cc == ProcCC_None || cc == ProcCC_PureNone || cc == ProcCC_InlineAsm) {
 		return false;
 	}
 

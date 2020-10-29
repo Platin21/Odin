@@ -1210,6 +1210,10 @@ bool is_type_proc(Type *t) {
 	t = base_type(t);
 	return t->kind == Type_Proc;
 }
+bool is_type_asm_proc(Type *t) {
+	t = base_type(t);
+	return t->kind == Type_Proc && t->Proc.calling_convention == ProcCC_InlineAsm;
+}
 bool is_type_poly_proc(Type *t) {
 	t = base_type(t);
 	return t->kind == Type_Proc && t->Proc.is_polymorphic;
@@ -2457,6 +2461,7 @@ Selection lookup_field_with_selection(Type *type_, String field_name, bool is_ty
 
 			if (f->flags & EntityFlag_Using) {
 				isize prev_count = sel.index.count;
+				bool prev_indirect = sel.indirect;
 				selection_add_index(&sel, i); // HACK(bill): Leaky memory
 
 				sel = lookup_field_with_selection(f->type, field_name, is_type, sel, allow_blank_ident);
@@ -2468,6 +2473,7 @@ Selection lookup_field_with_selection(Type *type_, String field_name, bool is_ty
 					return sel;
 				}
 				sel.index.count = prev_count;
+				sel.indirect = prev_indirect;
 			}
 		}
 
@@ -3333,6 +3339,17 @@ Type *get_struct_field_type(Type *t, isize index) {
 	t = base_type(type_deref(t));
 	GB_ASSERT(t->kind == Type_Struct);
 	return t->Struct.fields[index]->type;
+}
+
+
+Type *reduce_tuple_to_single_type(Type *original_type) {
+	if (original_type != nullptr) {
+		Type *t = core_type(original_type);
+		if (t->kind == Type_Tuple && t->Tuple.variables.count == 1) {
+			return t->Tuple.variables[0]->type;
+		}
+	}
+	return original_type;
 }
 
 

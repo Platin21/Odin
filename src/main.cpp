@@ -583,8 +583,9 @@ enum BuildFlagKind {
 	BuildFlag_UseLLVMApi,
 	BuildFlag_IgnoreUnknownAttributes,
 	BuildFlag_ExtraLinkerFlags,
-	BuildFlag_DisallowDo,
+	BuildFlag_Microarch,
 
+	BuildFlag_DisallowDo,
 	BuildFlag_DefaultToNilAllocator,
 
 	BuildFlag_Compact,
@@ -681,9 +682,10 @@ bool parse_build_flags(Array<String> args) {
 	add_flag(&build_flags, BuildFlag_Vet,               str_lit("vet"),                 BuildFlagParam_None);
 	add_flag(&build_flags, BuildFlag_UseLLVMApi,        str_lit("llvm-api"),            BuildFlagParam_None);
 	add_flag(&build_flags, BuildFlag_IgnoreUnknownAttributes, str_lit("ignore-unknown-attributes"), BuildFlagParam_None);
-	add_flag(&build_flags, BuildFlag_ExtraLinkerFlags,  str_lit("extra-linker-flags"), BuildFlagParam_String);
-	add_flag(&build_flags, BuildFlag_DisallowDo,        str_lit("disallow-do"), BuildFlagParam_None);
+	add_flag(&build_flags, BuildFlag_ExtraLinkerFlags,  str_lit("extra-linker-flags"),              BuildFlagParam_String);
+	add_flag(&build_flags, BuildFlag_Microarch,         str_lit("microarch"),                       BuildFlagParam_String);
 
+	add_flag(&build_flags, BuildFlag_DisallowDo,            str_lit("disallow-do"),              BuildFlagParam_None);
 	add_flag(&build_flags, BuildFlag_DefaultToNilAllocator, str_lit("default-to-nil-allocator"), BuildFlagParam_None);
 
 	add_flag(&build_flags, BuildFlag_Compact, str_lit("compact"), BuildFlagParam_None);
@@ -1059,6 +1061,8 @@ bool parse_build_flags(Array<String> args) {
 								build_context.build_mode = BuildMode_Object;
 							} else if (str == "exe") {
 								build_context.build_mode = BuildMode_Executable;
+							} else if (str == "asm" || str == "assembly" || str == "assembler") {
+								build_context.build_mode = BuildMode_Assembly;
 							} else {
 								gb_printf_err("Unknown build mode '%.*s'\n", LIT(str));
 								bad_flags = true;
@@ -1107,6 +1111,12 @@ bool parse_build_flags(Array<String> args) {
 						case BuildFlag_ExtraLinkerFlags:
 							GB_ASSERT(value.kind == ExactValue_String);
 							build_context.extra_linker_flags = value.value_string;
+							break;
+
+						case BuildFlag_Microarch:
+							GB_ASSERT(value.kind == ExactValue_String);
+							build_context.microarch = value.value_string;
+							string_to_lower(&build_context.microarch);
 							break;
 
 						case BuildFlag_DisallowDo:
@@ -1754,6 +1764,12 @@ int main(int arg_count, char const **arg_ptr) {
 			return 1;
 		}
 	}
+	if (!build_context.use_llvm_api) {
+		if (build_context.build_mode == BuildMode_Assembly) {
+			print_usage_line(0, "-build-mode:assembly is only supported with the -llvm-api backend", LIT(args[0]));
+			return 1;
+		}
+	}
 
 	init_universal();
 	// TODO(bill): prevent compiling without a linker
@@ -1817,11 +1833,16 @@ int main(int arg_count, char const **arg_ptr) {
 		}
 		lb_generate_code(&gen);
 
-		if (build_context.build_mode != BuildMode_Object) {
-			i32 linker_stage_exit_count = linker_stage(&gen);
-			if (linker_stage_exit_count != 0) {
-				return linker_stage_exit_count;
+		switch (build_context.build_mode) {
+		case BuildMode_Executable:
+		case BuildMode_DynamicLibrary:
+			{
+				i32 linker_stage_exit_count = linker_stage(&gen);
+				if (linker_stage_exit_count != 0) {
+					return linker_stage_exit_count;
+				}
 			}
+			break;
 		}
 
 		if (build_context.show_timings) {

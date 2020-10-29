@@ -2430,15 +2430,16 @@ void lb_begin_procedure_body(lbProcedure *p) {
 
 	i32 parameter_index = 0;
 
+
+	lbValue return_ptr_value = {};
 	if (p->type->Proc.return_by_pointer) {
 		// NOTE(bill): this must be parameter 0
 		Type *ptr_type = alloc_type_pointer(reduce_tuple_to_single_type(p->type->Proc.results));
 		Entity *e = alloc_entity_param(nullptr, make_token_ident(str_lit("agg.result")), ptr_type, false, false);
 		e->flags |= EntityFlag_Sret | EntityFlag_NoAlias;
 
-		lbValue return_ptr_value = {};
 		return_ptr_value.value = LLVMGetParam(p->value, 0);
-		return_ptr_value.type = alloc_type_pointer(p->type->Proc.abi_compat_result_type);
+		return_ptr_value.type = ptr_type;
 		p->return_ptr = lb_addr(return_ptr_value);
 
 		lb_add_entity(p->module, e, return_ptr_value);
@@ -2475,37 +2476,31 @@ void lb_begin_procedure_body(lbProcedure *p) {
 		GB_ASSERT(p->type->Proc.result_count > 0);
 		TypeTuple *results = &p->type->Proc.results->Tuple;
 
-		isize result_index = 0;
-
 		for_array(i, results->variables) {
 			Entity *e = results->variables[i];
-			if (e->kind != Entity_Variable) {
-				continue;
-			}
+			GB_ASSERT(e->kind == Entity_Variable);
 
 			if (e->token.string != "") {
 				GB_ASSERT(!is_blank_ident(e->token));
 
-				lbAddr res = lb_add_local(p, e->type, e);
+				lbAddr res = {};
+				if (p->type->Proc.return_by_pointer) {
+					lbValue ptr = return_ptr_value;
+					if (results->variables.count != 1) {
+						ptr = lb_emit_struct_ep(p, ptr, cast(i32)i);
+					}
 
-				lbValue c = {};
-				switch (e->Variable.param_value.kind) {
-				case ParameterValue_Constant:
-					c = lb_const_value(p->module, e->type, e->Variable.param_value.value);
-					break;
-				case ParameterValue_Nil:
-					c = lb_const_nil(p->module, e->type);
-					break;
-				case ParameterValue_Location:
-					GB_PANIC("ParameterValue_Location");
-					break;
+					res = lb_addr(ptr);
+					lb_add_entity(p->module, e, ptr);
+				} else {
+					res = lb_add_local(p, e->type, e);
 				}
-				if (c.value != nullptr) {
+
+				if (e->Variable.param_value.kind != ParameterValue_Invalid) {
+					lbValue c = lb_handle_param_value(p, e->type, e->Variable.param_value, e->token.pos);
 					lb_addr_store(p, res, c);
 				}
 			}
-
-			result_index += 1;
 		}
 	}
 
@@ -5496,18 +5491,26 @@ lbValue lb_emit_arith(lbProcedure *p, TokenKind op, lbValue lhs, lbValue rhs, Ty
 
 		if (inline_array_arith) {
 			for (i64 i = 0; i < count; i++) {
-				lbValue a = lb_emit_load(p, lb_emit_array_epi(p, x, i));
-				lbValue b = lb_emit_load(p, lb_emit_array_epi(p, y, i));
+				lbValue a_ptr = lb_emit_array_epi(p, x, i);
+				lbValue b_ptr = lb_emit_array_epi(p, y, i);
+				lbValue dst_ptr = lb_emit_array_epi(p, res.addr, i);
+
+				lbValue a = lb_emit_load(p, a_ptr);
+				lbValue b = lb_emit_load(p, b_ptr);
 				lbValue c = lb_emit_arith(p, op, a, b, elem_type);
-				lb_emit_store(p, lb_emit_array_epi(p, res.addr, i), c);
+				lb_emit_store(p, dst_ptr, c);
 			}
 		} else {
-			auto loop_data = lb_loop_start(p, count);
+			auto loop_data = lb_loop_start(p, count, t_i32);
 
-			lbValue a = lb_emit_load(p, lb_emit_array_ep(p, x, loop_data.idx));
-			lbValue b = lb_emit_load(p, lb_emit_array_ep(p, y, loop_data.idx));
+			lbValue a_ptr = lb_emit_array_ep(p, x, loop_data.idx);
+			lbValue b_ptr = lb_emit_array_ep(p, y, loop_data.idx);
+			lbValue dst_ptr = lb_emit_array_ep(p, res.addr, loop_data.idx);
+
+			lbValue a = lb_emit_load(p, a_ptr);
+			lbValue b = lb_emit_load(p, b_ptr);
 			lbValue c = lb_emit_arith(p, op, a, b, elem_type);
-			lb_emit_store(p, lb_emit_array_ep(p, res.addr, loop_data.idx), c);
+			lb_emit_store(p, dst_ptr, c);
 
 			lb_loop_end(p, loop_data);
 		}
@@ -7832,8 +7835,17 @@ lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValue const &tv,
 		}
 
 	case BuiltinProc_cpu_relax:
-		// TODO(bill): BuiltinProc_cpu_relax
-		// ir_write_str_lit(f, "call void asm sideeffect \"pause\", \"\"()");
+		{
+			LLVMTypeRef func_type = LLVMFunctionType(LLVMVoidTypeInContext(p->module->ctx), nullptr, 0, false);
+			LLVMValueRef the_asm = LLVMGetInlineAsm(func_type,
+				"pause", 5,
+				"", 0,
+				/*HasSideEffects*/true, /*IsAlignStack*/false,
+				LLVMInlineAsmDialectATT
+			);
+			GB_ASSERT(the_asm != nullptr);
+			LLVMBuildCall2(p->builder, func_type, the_asm, nullptr, 0, "");
+		}
 		return {};
 
 	case BuiltinProc_atomic_fence:
@@ -9550,6 +9562,43 @@ lbValue lb_build_expr(lbProcedure *p, Ast *expr) {
 
 	case_ast_node(ie, IndexExpr, expr);
 		return lb_addr_load(p, lb_build_addr(p, expr));
+	case_end;
+
+	case_ast_node(ia, InlineAsmExpr, expr);
+		Type *t = type_of_expr(expr);
+		GB_ASSERT(is_type_asm_proc(t));
+
+		String asm_string = {};
+		String constraints_string = {};
+
+		TypeAndValue tav;
+		tav = type_and_value_of_expr(ia->asm_string);
+		GB_ASSERT(is_type_string(tav.type));
+		GB_ASSERT(tav.value.kind == ExactValue_String);
+		asm_string = tav.value.value_string;
+
+		tav = type_and_value_of_expr(ia->constraints_string);
+		GB_ASSERT(is_type_string(tav.type));
+		GB_ASSERT(tav.value.kind == ExactValue_String);
+		constraints_string = tav.value.value_string;
+
+
+		LLVMInlineAsmDialect dialect = LLVMInlineAsmDialectATT;
+		switch (ia->dialect) {
+		case InlineAsmDialect_Default: dialect = LLVMInlineAsmDialectATT;   break;
+		case InlineAsmDialect_ATT:     dialect = LLVMInlineAsmDialectATT;   break;
+		case InlineAsmDialect_Intel:   dialect = LLVMInlineAsmDialectIntel; break;
+		default: GB_PANIC("Unhandled inline asm dialect"); break;
+		}
+
+		LLVMTypeRef func_type = LLVMGetElementType(lb_type(p->module, t));
+		LLVMValueRef the_asm = LLVMGetInlineAsm(func_type,
+			cast(char *)asm_string.text, cast(size_t)asm_string.len,
+			cast(char *)constraints_string.text, cast(size_t)constraints_string.len,
+			ia->has_side_effects, ia->is_align_stack, dialect
+		);
+		GB_ASSERT(the_asm != nullptr);
+		return {the_asm, t};
 	case_end;
 	}
 
@@ -11858,8 +11907,33 @@ void lb_generate_code(lbGenerator *gen) {
 		code_mode = LLVMCodeModelJITDefault;
 	}
 
-	LLVMTargetMachineRef target_machine = LLVMCreateTargetMachine(target, target_triple, "generic", "", LLVMCodeGenLevelNone, LLVMRelocDefault, code_mode);
+	char const *host_cpu_name = LLVMGetHostCPUName();
+	char const *llvm_cpu = "generic";
+	char const *llvm_features = "";
+	if (build_context.microarch.len != 0) {
+		if (build_context.microarch == "native") {
+			llvm_cpu = host_cpu_name;
+		} else {
+			llvm_cpu = alloc_cstring(heap_allocator(), build_context.microarch);
+		}
+		if (gb_strcmp(llvm_cpu, host_cpu_name) == 0) {
+			llvm_features = LLVMGetHostCPUFeatures();
+		}
+	}
+
+	// GB_ASSERT_MSG(LLVMTargetHasAsmBackend(target));
+
+	LLVMCodeGenOptLevel code_gen_level = LLVMCodeGenLevelNone;
+	switch (build_context.optimization_level) {
+	case 0: code_gen_level = LLVMCodeGenLevelNone;       break;
+	case 1: code_gen_level = LLVMCodeGenLevelLess;       break;
+	case 2: code_gen_level = LLVMCodeGenLevelDefault;    break;
+	case 3: code_gen_level = LLVMCodeGenLevelAggressive; break;
+	}
+
+	LLVMTargetMachineRef target_machine = LLVMCreateTargetMachine(target, target_triple, llvm_cpu, llvm_features, code_gen_level, LLVMRelocDefault, code_mode);
 	defer (LLVMDisposeTargetMachine(target_machine));
+
 
 	LLVMSetModuleDataLayout(mod, LLVMCreateTargetDataLayout(target_machine));
 
@@ -12155,7 +12229,7 @@ void lb_generate_code(lbGenerator *gen) {
 
 	LLVMPassManagerRef default_function_pass_manager = LLVMCreateFunctionPassManagerForModule(mod);
 	defer (LLVMDisposePassManager(default_function_pass_manager));
-	{
+	/*{
 		LLVMAddMemCpyOptPass(default_function_pass_manager);
 		LLVMAddPromoteMemoryToRegisterPass(default_function_pass_manager);
 		LLVMAddMergedLoadStoreMotionPass(default_function_pass_manager);
@@ -12186,7 +12260,57 @@ void lb_generate_code(lbGenerator *gen) {
 			LLVMAddLoopVectorizePass(default_function_pass_manager);
 
 		}
+	}*/
+	if (build_context.optimization_level == 0 && false) {
+		auto dfpm = default_function_pass_manager;
+
+		LLVMAddMemCpyOptPass(dfpm);
+		LLVMAddPromoteMemoryToRegisterPass(dfpm);
+		LLVMAddMergedLoadStoreMotionPass(dfpm);
+		LLVMAddAggressiveInstCombinerPass(dfpm);
+		LLVMAddConstantPropagationPass(dfpm);
+		LLVMAddAggressiveDCEPass(dfpm);
+		LLVMAddMergedLoadStoreMotionPass(dfpm);
+		LLVMAddPromoteMemoryToRegisterPass(dfpm);
+		LLVMAddCFGSimplificationPass(dfpm);
+		LLVMAddScalarizerPass(dfpm);
+	} else {
+		auto dfpm = default_function_pass_manager;
+
+		LLVMAddMemCpyOptPass(dfpm);
+		LLVMAddPromoteMemoryToRegisterPass(dfpm);
+		LLVMAddMergedLoadStoreMotionPass(dfpm);
+		LLVMAddAggressiveInstCombinerPass(dfpm);
+		LLVMAddConstantPropagationPass(dfpm);
+		LLVMAddAggressiveDCEPass(dfpm);
+		LLVMAddMergedLoadStoreMotionPass(dfpm);
+		LLVMAddPromoteMemoryToRegisterPass(dfpm);
+		LLVMAddCFGSimplificationPass(dfpm);
+
+
+		// LLVMAddInstructionCombiningPass(dfpm);
+		LLVMAddSLPVectorizePass(dfpm);
+		LLVMAddLoopVectorizePass(dfpm);
+		LLVMAddEarlyCSEPass(dfpm);
+		LLVMAddEarlyCSEMemSSAPass(dfpm);
+
+		LLVMAddScalarizerPass(dfpm);
+		LLVMAddLoopIdiomPass(dfpm);
+
+		// LLVMAddAggressiveInstCombinerPass(dfpm);
+		// LLVMAddLowerExpectIntrinsicPass(dfpm);
+
+		// LLVMAddPartiallyInlineLibCallsPass(dfpm);
+
+		// LLVMAddAlignmentFromAssumptionsPass(dfpm);
+		// LLVMAddDeadStoreEliminationPass(dfpm);
+		// LLVMAddReassociatePass(dfpm);
+		// LLVMAddAddDiscriminatorsPass(dfpm);
+		// LLVMAddPromoteMemoryToRegisterPass(dfpm);
+		// LLVMAddCorrelatedValuePropagationPass(dfpm);
+		// LLVMAddMemCpyOptPass(dfpm);
 	}
+
 
 	LLVMPassManagerRef default_function_pass_manager_without_memcpy = LLVMCreateFunctionPassManagerForModule(mod);
 	defer (LLVMDisposePassManager(default_function_pass_manager_without_memcpy));
@@ -12424,6 +12548,7 @@ void lb_generate_code(lbGenerator *gen) {
 	defer (LLVMDisposePassManager(module_pass_manager));
 	LLVMAddAlwaysInlinerPass(module_pass_manager);
 	LLVMAddStripDeadPrototypesPass(module_pass_manager);
+	LLVMAddAnalysisPasses(target_machine, module_pass_manager);
 	// if (build_context.optimization_level >= 2) {
 	// 	LLVMAddArgumentPromotionPass(module_pass_manager);
 	// 	LLVMAddConstantMergePass(module_pass_manager);
@@ -12446,18 +12571,25 @@ void lb_generate_code(lbGenerator *gen) {
 	defer (gb_free(heap_allocator(), filepath_ll.text));
 
 	String filepath_obj = {};
-	switch (build_context.metrics.os) {
-	case TargetOs_windows:
-		filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".obj"));
-		break;
-	case TargetOs_darwin:
-	case TargetOs_linux:
-	case TargetOs_essence:
-		filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".o"));
-		break;
-	case TargetOs_js:
-		filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".wasm-obj"));
-		break;
+	LLVMCodeGenFileType code_gen_file_type = LLVMObjectFile;
+
+	if (build_context.build_mode == BuildMode_Assembly) {
+		filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".S"));
+		code_gen_file_type = LLVMAssemblyFile;
+	} else {
+		switch (build_context.metrics.os) {
+		case TargetOs_windows:
+			filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".obj"));
+			break;
+		case TargetOs_darwin:
+		case TargetOs_linux:
+		case TargetOs_essence:
+			filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".o"));
+			break;
+		case TargetOs_js:
+			filepath_obj = concatenate_strings(heap_allocator(), gen->output_base, STR_LIT(".wasm-obj"));
+			break;
+		}
 	}
 
 
@@ -12476,8 +12608,6 @@ void lb_generate_code(lbGenerator *gen) {
 	}
 
 	TIME_SECTION("LLVM Object Generation");
-
-	LLVMCodeGenFileType code_gen_file_type = LLVMObjectFile;
 
 	if (LLVMTargetMachineEmitToFile(target_machine, mod, cast(char *)filepath_obj.text, code_gen_file_type, &llvm_error)) {
 		gb_printf_err("LLVM Error: %s\n", llvm_error);
