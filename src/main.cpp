@@ -158,6 +158,7 @@ i32 system_exec_command_line_app(char const *name, char const *fmt, ...) {
 
 #if defined(LLVM_BACKEND_SUPPORT)
 void linker_stage(lbGenerator *gen) {
+	gb_printf("Using LLVM BACKEND!\n");
 	Timings *timings = &global_timings;
 
 	String output_base = gen->output_base;

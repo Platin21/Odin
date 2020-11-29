@@ -11626,6 +11626,9 @@ void lb_init_module(lbModule *m, Checker *c) {
 
 
 bool lb_init_generator(lbGenerator *gen, Checker *c) {
+
+	gb_printf("Using LLVM!");
+
 	if (global_error_collector.count != 0) {
 		return false;
 	}
