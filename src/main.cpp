@@ -12,6 +12,13 @@ gb_global Timings global_timings = {0};
 
 #if defined(LLVM_BACKEND_SUPPORT)
 #include "llvm-c/Types.h"
+
+// making sure the right llvm config is used 
+#include "llvm-c/Config/llvm-config.h"
+#if LLVM_VERSION_MAJOR == 11
+	#error LLVM version major 11 needs to be used 
+#endif
+
 #endif
 
 #include "parser.hpp"
@@ -20,7 +27,6 @@ gb_global Timings global_timings = {0};
 #include "parser.cpp"
 #include "checker.cpp"
 #include "docs.cpp"
-
 
 #if defined(LLVM_BACKEND_SUPPORT)
 #include "llvm_backend.cpp"
