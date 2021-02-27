@@ -42,6 +42,15 @@ linear_search :: proc(array: $A/[]$T, key: T) -> (index: int, found: bool)
 	return -1, false;
 }
 
+linear_search_proc :: proc(array: $A/[]$T, f: proc(T) -> bool) -> (index: int, found: bool) #no_bounds_check {
+	for x, i in array {
+		if f(x) {
+			return i, true;
+		}
+	}
+	return -1, false;
+}
+
 binary_search :: proc(array: $A/[]$T, key: T) -> (index: int, found: bool)
 	where intrinsics.type_is_ordered(T) #no_bounds_check {
 
@@ -63,7 +72,7 @@ binary_search :: proc(array: $A/[]$T, key: T) -> (index: int, found: bool)
 			// NOTE(bill): This is technically interpolation search
 			m := lo + int((key - array[lo]) * T(hi - lo) / (array[hi] - array[lo]));
 		} else {
-			m := (lo + hi)/2;
+			m := lo + (hi - lo)/2;
 		}
 		switch {
 		case array[m] < key:
@@ -80,6 +89,7 @@ binary_search :: proc(array: $A/[]$T, key: T) -> (index: int, found: bool)
 	}
 	return -1, false;
 }
+
 
 equal :: proc(a, b: $T/[]$E) -> bool where intrinsics.type_is_comparable(E) {
 	if len(a) != len(b) {
@@ -157,7 +167,7 @@ concatenate :: proc(a: []$T/[]$E, allocator := context.allocator) -> (res: T) {
 	res = make(T, n, allocator);
 	i := 0;
 	for s in a {
-		i += copy(b[i:], s);
+		i += copy(res[i:], s);
 	}
 	return;
 }
@@ -216,7 +226,7 @@ split_last :: proc(array: $T/[]$E) -> (rest: T, last: E) {
 first :: proc(array: $T/[]$E) -> E {
 	return array[0];
 }
-last :: proc(array: $T/[]$E) -> ^E {
+last :: proc(array: $T/[]$E) -> E {
 	return array[len(array)-1];
 }
 
@@ -251,4 +261,45 @@ get_ptr :: proc(array: $T/[]$E, index: int) -> (value: ^E, ok: bool) {
 
 as_ptr :: proc(array: $T/[]$E) -> ^E {
 	return raw_data(array);
+}
+
+
+mapper :: proc(s: $S/[]$U, f: proc(U) -> $V, allocator := context.allocator) -> []V {
+	r := make([]V, len(s), allocator);
+	for v, i in s {
+		r[i] = f(v);
+	}
+	return r;
+}
+
+reduce :: proc(s: $S/[]$U, initializer: $V, f: proc(V, U) -> V) -> V {
+	r := initializer;
+	for v in s {
+		r = f(r, v);
+	}
+	return r;
+}
+
+filter :: proc(s: $S/[]$U, f: proc(U) -> bool, allocator := context.allocator) -> S {
+	r := make([dynamic]S, 0, 0, allocator);
+	for v in s {
+		if f(v) {
+			append(&r, v);
+		}
+	}
+	return r[:];
+}
+
+
+
+dot_product :: proc(a, b: $S/[]$T) -> T
+	where intrinsics.type_is_numeric(T) {
+	if len(a) != len(b) {
+		panic("slice.dot_product: slices of unequal length");
+	}
+	r: T;
+	#no_bounds_check for _, i in a {
+		r += a[i] * b[i];
+	}
+	return r;
 }

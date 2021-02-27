@@ -28,9 +28,7 @@ Type_Info_Struct           :: runtime.Type_Info_Struct;
 Type_Info_Union            :: runtime.Type_Info_Union;
 Type_Info_Enum             :: runtime.Type_Info_Enum;
 Type_Info_Map              :: runtime.Type_Info_Map;
-Type_Info_Bit_Field        :: runtime.Type_Info_Bit_Field;
 Type_Info_Bit_Set          :: runtime.Type_Info_Bit_Set;
-Type_Info_Opaque           :: runtime.Type_Info_Opaque;
 Type_Info_Simd_Vector      :: runtime.Type_Info_Simd_Vector;
 Type_Info_Relative_Pointer :: runtime.Type_Info_Relative_Pointer;
 Type_Info_Relative_Slice   :: runtime.Type_Info_Relative_Slice;
@@ -60,9 +58,7 @@ Type_Kind :: enum {
 	Union,
 	Enum,
 	Map,
-	Bit_Field,
 	Bit_Set,
-	Opaque,
 	Simd_Vector,
 	Relative_Pointer,
 	Relative_Slice,
@@ -94,9 +90,7 @@ type_kind :: proc(T: typeid) -> Type_Kind {
 		case Type_Info_Union:            return .Union;
 		case Type_Info_Enum:             return .Enum;
 		case Type_Info_Map:              return .Map;
-		case Type_Info_Bit_Field:        return .Bit_Field;
 		case Type_Info_Bit_Set:          return .Bit_Set;
-		case Type_Info_Opaque:           return .Opaque;
 		case Type_Info_Simd_Vector:      return .Simd_Vector;
 		case Type_Info_Relative_Pointer: return .Relative_Pointer;
 		case Type_Info_Relative_Slice:   return .Relative_Slice;
@@ -139,7 +133,6 @@ type_info_core :: proc(info: ^runtime.Type_Info) -> ^runtime.Type_Info {
 		#partial switch i in base.variant {
 		case Type_Info_Named:  base = i.base;
 		case Type_Info_Enum:   base = i.base;
-		case Type_Info_Opaque: base = i.elem;
 		case: break loop;
 		}
 	}
@@ -177,7 +170,6 @@ typeid_elem :: proc(id: typeid) -> typeid {
 		case 256: return f64;
 		}
 	case Type_Info_Pointer:          return v.elem.id;
-	case Type_Info_Opaque:           return v.elem.id;
 	case Type_Info_Array:            return v.elem.id;
 	case Type_Info_Enumerated_Array: return v.elem.id;
 	case Type_Info_Slice:            return v.elem.id;
@@ -209,7 +201,7 @@ as_bytes :: proc(v: any) -> []byte {
 	return nil;
 }
 
-any_data :: inline proc(v: any) -> (data: rawptr, id: typeid) {
+any_data :: #force_inline proc(v: any) -> (data: rawptr, id: typeid) {
 	return v.data, v.id;
 }
 
@@ -344,24 +336,29 @@ index :: proc(val: any, i: int, loc := #caller_location) -> any {
 
 
 
-
+// Struct_Tag represents the type of the string of a struct field
+//
+// Through convention, tags are the concatenation of optionally space separationed key:"value" pairs.
+// Each key is a non-empty string which contains no control characters other than space, quotes, and colon.
 Struct_Tag :: distinct string;
 
 Struct_Field :: struct {
-	name:   string,
-	type:   typeid,
-	tag:    Struct_Tag,
-	offset: uintptr,
+	name:     string,
+	type:     typeid,
+	tag:      Struct_Tag,
+	offset:   uintptr,
+	is_using: bool,
 }
 
 struct_field_at :: proc(T: typeid, i: int) -> (field: Struct_Field) {
 	ti := runtime.type_info_base(type_info_of(T));
 	if s, ok := ti.variant.(runtime.Type_Info_Struct); ok {
 		if 0 <= i && i < len(s.names) {
-			field.name   = s.names[i];
-			field.type   = s.types[i].id;
-			field.tag    = Struct_Tag(s.tags[i]);
-			field.offset = s.offsets[i];
+			field.name     = s.names[i];
+			field.type     = s.types[i].id;
+			field.tag      = Struct_Tag(s.tags[i]);
+			field.offset   = s.offsets[i];
+			field.is_using = s.usings[i];
 		}
 	}
 	return;
@@ -372,10 +369,11 @@ struct_field_by_name :: proc(T: typeid, name: string) -> (field: Struct_Field) {
 	if s, ok := ti.variant.(runtime.Type_Info_Struct); ok {
 		for fname, i in s.names {
 			if fname == name {
-				field.name   = s.names[i];
-				field.type   = s.types[i].id;
-				field.tag    = Struct_Tag(s.tags[i]);
-				field.offset = s.offsets[i];
+				field.name     = s.names[i];
+				field.type     = s.types[i].id;
+				field.tag      = Struct_Tag(s.tags[i]);
+				field.offset   = s.offsets[i];
+				field.is_using = s.usings[i];
 				break;
 			}
 		}
@@ -531,22 +529,40 @@ enum_string :: proc(a: any) -> string {
 
 // Given a enum type and a value name, get the enum value.
 enum_from_name :: proc($EnumType: typeid, name: string) -> (value: EnumType, ok: bool) {
-    ti := type_info_base(type_info_of(EnumType));
-    if eti, eti_ok := ti.variant.(runtime.Type_Info_Enum); eti_ok {
-        for value_name, i in eti.names {
-            if value_name != name {
-            	continue;
-            }
-            v := eti.values[i];
-            value = EnumType(v);
-            ok = true;
-            return;
-        }
-    } else {
-        panic("expected enum type to reflect.enum_from_name");
-    }
-    return;
+	ti := type_info_base(type_info_of(EnumType));
+	if eti, eti_ok := ti.variant.(runtime.Type_Info_Enum); eti_ok {
+		for value_name, i in eti.names {
+			if value_name != name {
+				continue;
+			}
+			v := eti.values[i];
+			value = EnumType(v);
+			ok = true;
+			return;
+		}
+	} else {
+		panic("expected enum type to reflect.enum_from_name");
+	}
+	return;
 }
+
+enum_from_name_any :: proc(EnumType: typeid, name: string) -> (value: runtime.Type_Info_Enum_Value, ok: bool) {
+	ti := runtime.type_info_base(type_info_of(EnumType));
+	if eti, eti_ok := ti.variant.(runtime.Type_Info_Enum); eti_ok {
+		for value_name, i in eti.names {
+			if value_name != name {
+				continue;
+			}
+			value = eti.values[i];
+			ok = true;
+			return;
+		}
+	} else {
+		panic("expected enum type to reflect.enum_from_name_any");
+	}
+	return;
+}
+
 
 union_variant_type_info :: proc(a: any) -> ^runtime.Type_Info {
 	id := union_variant_typeid(a);
@@ -1206,3 +1222,82 @@ as_raw_data :: proc(a: any) -> (value: rawptr, valid: bool) {
 
 	return;
 }
+
+/*
+not_equal :: proc(a, b: any) -> bool {
+	return !equal(a, b);
+}
+equal :: proc(a, b: any) -> bool {
+	if a == nil && b == nil {
+		return true;
+	}
+
+	if a.id != b.id {
+		return false;
+	}
+
+	if a.data == b.data {
+		return true;
+	}
+
+	t := type_info_of(a.id);
+	if .Comparable not_in t.flags {
+		return false;
+	}
+
+	if t.size == 0 {
+		return true;
+	}
+
+	if .Simple_Compare in t.flags {
+		return mem.compare_byte_ptrs((^byte)(a.data), (^byte)(b.data), t.size) == 0;
+	}
+
+	t = runtime.type_info_core(t);
+
+	#partial switch v in t.variant {
+	case Type_Info_String:
+		if v.is_cstring {
+			x := string((^cstring)(a.data)^);
+			y := string((^cstring)(b.data)^);
+			return x == y;
+		} else {
+			x := (^string)(a.data)^;
+			y := (^string)(b.data)^;
+			return x == y;
+		}
+
+	case Type_Info_Array:
+		for i in 0..<v.count {
+			x := rawptr(uintptr(a.data) + uintptr(v.elem_size*i));
+			y := rawptr(uintptr(b.data) + uintptr(v.elem_size*i));
+			if !equal(any{x, v.elem.id}, any{y, v.elem.id}) {
+				return false;
+			}
+		}
+	case Type_Info_Enumerated_Array:
+		for i in 0..<v.count {
+			x := rawptr(uintptr(a.data) + uintptr(v.elem_size*i));
+			y := rawptr(uintptr(b.data) + uintptr(v.elem_size*i));
+			if !equal(any{x, v.elem.id}, any{y, v.elem.id}) {
+				return false;
+			}
+		}
+	case Type_Info_Struct:
+		if v.equal != nil {
+			return v.equal(a.data, b.data);
+		} else {
+			for offset, i in v.offsets {
+				x := rawptr(uintptr(a.data) + offset);
+				y := rawptr(uintptr(b.data) + offset);
+				id := v.types[i].id;
+				if !equal(any{x, id}, any{y, id}) {
+					return false;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+*/

@@ -75,7 +75,7 @@ the_basics :: proc() {
 		// Binary literals are prefixed with 0b, octal literals with 0o, and hexadecimal
 		// literals 0x. A leading zero does not produce an octal constant (unlike C).
 
-		// In Odin, if a number constant is possible to be represented by a type without
+		// In Odin, if a numeric constant can be represented by a type without
 		// precision loss, it will automatically convert to that type.
 
 		x: int = 1.0; // A float literal but it can be represented by an integer without precision loss
@@ -85,7 +85,7 @@ the_basics :: proc() {
 		y = 1;  // `1` is an untyped integer literal which can implicitly convert to `int`
 
 		z: f64; // `z` is typed of type `f64` (64-bit floating point number)
-		z = 1;  // `1` is an untyped integer literals which can be implicity conver to `f64`
+		z = 1;  // `1` is an untyped integer literal which can be implicitly converted to `f64`
 				// No need for any suffixes or decimal places like in other languages
 				// CONSTANTS JUST WORK!!!
 
@@ -150,7 +150,7 @@ control_flow :: proc() {
 			i += 1;
 		}
 
-		// If the condition is omitted, this produces an infinite loop:
+		// If the condition is omitted, an infinite loop is produced:
 		for {
 			break;
 		}
@@ -1491,25 +1491,25 @@ quaternions :: proc() {
 	}
 }
 
-inline_for_statement :: proc() {
-	fmt.println("\n#inline for statements");
+unroll_for_statement :: proc() {
+	fmt.println("\n#'#unroll for' statements");
 
-	// 'inline for' works the same as if the 'inline' prefix did not
+	// '#unroll for' works the same as if the 'inline' prefix did not
 	// exist but these ranged loops are explicitly unrolled which can
 	// be very very useful for certain optimizations
 
 	fmt.println("Ranges");
-	inline for x, i in 1..<4 {
+	#unroll for x, i in 1..<4 {
 		fmt.println(x, i);
 	}
 
 	fmt.println("Strings");
-	inline for r, i in "Hello, 世界" {
+	#unroll for r, i in "Hello, 世界" {
 		fmt.println(r, i);
 	}
 
 	fmt.println("Arrays");
-	inline for elem, idx in ([4]int{1, 4, 9, 16}) {
+	#unroll for elem, idx in ([4]int{1, 4, 9, 16}) {
 		fmt.println(elem, idx);
 	}
 
@@ -1521,7 +1521,7 @@ inline_for_statement :: proc() {
 		D,
 	};
 	fmt.println("Enum types");
-	inline for elem, idx in Foo_Enum {
+	#unroll for elem, idx in Foo_Enum {
 		fmt.println(elem, idx);
 	}
 }
@@ -1971,22 +1971,6 @@ relative_data_types :: proc() {
 	fmt.println(rel_slice[1]);
 }
 
-pure_procedures :: proc() {
-	fmt.println("\n#pure procedures");
-
-	square :: proc "pure" (x: int) -> int {
-		return x*x + 1;
-	}
-
-	do_math :: proc "pure" (x: int) -> int {
-		// Only "pure" procedure calls are allowed within a "pure" procedure
-		return square(x) + 1;
-	}
-
-	x := do_math(5);
-	fmt.println(x);
-}
-
 main :: proc() {
 	when true {
 		the_basics();
@@ -2007,7 +1991,7 @@ main :: proc() {
 		deferred_procedure_associations();
 		reflection();
 		quaternions();
-		inline_for_statement();
+		unroll_for_statement();
 		where_clauses();
 		foreign_system();
 		ranged_fields_for_array_compound_literals();
@@ -2019,6 +2003,5 @@ main :: proc() {
 		union_maybe();
 		explicit_context_definition();
 		relative_data_types();
-		pure_procedures();
 	}
 }

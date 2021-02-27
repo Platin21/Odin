@@ -46,8 +46,19 @@ diff :: proc(start, end: Time) -> Duration {
 	return Duration(d);
 }
 
+since :: proc(start: Time) -> Duration {
+	return diff(start, now());
+}
+
+
 duration_nanoseconds :: proc(d: Duration) -> i64 {
 	return i64(d);
+}
+duration_microseconds :: proc(d: Duration) -> f64 {
+	return duration_seconds(d) * 1e6;
+}
+duration_milliseconds :: proc(d: Duration) -> f64 {
+	return duration_seconds(d) * 1e3;
 }
 duration_seconds :: proc(d: Duration) -> f64 {
 	sec := d / Second;
@@ -65,7 +76,7 @@ duration_hours :: proc(d: Duration) -> f64 {
 	return f64(hour) + f64(nsec)/(60*60*1e9);
 }
 
-_less_than_half :: inline proc(x, y: Duration) -> bool {
+_less_than_half :: #force_inline proc(x, y: Duration) -> bool {
 	return u64(x)+u64(x) < u64(y);
 }
 
@@ -96,7 +107,6 @@ duration_round :: proc(d, m: Duration) -> Duration {
 duration_truncate :: proc(d, m: Duration) -> Duration {
 	return d if m <= 0 else d - d%m;
 }
-
 
 date :: proc(t: Time) -> (year: int, month: Month, day: int) {
 	year, month, day, _ = _abs_date(_time_abs(t), true);
@@ -149,6 +159,17 @@ unix :: proc(sec: i64, nsec: i64) -> Time {
 	return Time{(sec*1e9 + nsec) + UNIX_TO_INTERNAL};
 }
 
+time_to_unix :: proc(t: Time) -> i64 {
+	return t._nsec/1e9;
+}
+
+time_to_unix_nano :: proc(t: Time) -> i64 {
+	return t._nsec;
+}
+
+time_add :: proc(t: Time, d: Duration) -> Time {
+	return Time{t._nsec + i64(d)};
+}
 
 
 ABSOLUTE_ZERO_YEAR :: i64(-292277022399); // Day is chosen so that 2001-01-01 is Monday in the calculations

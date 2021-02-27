@@ -57,6 +57,8 @@ enum EntityFlag : u32 {
 
 	EntityFlag_SoaPtrField   = 1<<19, // to allow s.x[0] where `s.x` is a pointer rather than a slice
 
+	EntityFlag_ProcBodyChecked = 1<<20,
+
 	EntityFlag_CVarArg       = 1<<21,
 	EntityFlag_AutoCast      = 1<<22,
 
@@ -120,6 +122,7 @@ struct Entity {
 	union {
 		struct {
 			ExactValue value;
+			ParameterValue param_value;
 		} Constant;
 		struct {
 			Ast *init_expr; // only used for some variables within procedure bodies
@@ -164,7 +167,7 @@ struct Entity {
 			Scope *scope;
 		} ImportName;
 		struct {
-			Array<String> paths;
+			Slice<String> paths;
 			String name;
 		} LibraryName;
 		i32 Nil;
@@ -198,6 +201,9 @@ bool is_entity_exported(Entity *e, bool allow_builtin = false) {
 	if (e->flags & EntityFlag_NotExported) {
 		return false;
 	}
+	if (e->file != nullptr && e->file->is_private) {
+		return false;
+	}
 
 	String name = e->token.string;
 	switch (name.len) {
@@ -219,7 +225,7 @@ bool entity_has_deferred_procedure(Entity *e) {
 gb_global u64 global_entity_id = 0;
 
 Entity *alloc_entity(EntityKind kind, Scope *scope, Token token, Type *type) {
-	gbAllocator a = heap_allocator();
+	gbAllocator a = permanent_allocator();
 	Entity *entity = gb_alloc_item(a, Entity);
 	entity->kind   = kind;
 	entity->state  = EntityState_Unresolved;
@@ -332,7 +338,7 @@ Entity *alloc_entity_import_name(Scope *scope, Token token, Type *type,
 }
 
 Entity *alloc_entity_library_name(Scope *scope, Token token, Type *type,
-                                  Array<String> paths, String name) {
+                                  Slice<String> paths, String name) {
 	Entity *entity = alloc_entity(Entity_LibraryName, scope, token, type);
 	entity->LibraryName.paths = paths;
 	entity->LibraryName.name = name;

@@ -107,6 +107,14 @@ default_parser :: proc() -> Parser {
 	};
 }
 
+is_package_name_reserved :: proc(name: string) -> bool {
+	switch name {
+	case "builtin", "intrinsics":
+		return true;
+	}
+	return false;
+}
+
 parse_file :: proc(p: ^Parser, file: ^ast.File) -> bool {
 	zero_parser: {
 		p.prev_tok         = {};
@@ -121,7 +129,7 @@ parse_file :: proc(p: ^Parser, file: ^ast.File) -> bool {
 	}
 
 	p.file = file;
-	tokenizer.init(&p.tok, file.src, file.fullpath);
+	tokenizer.init(&p.tok, file.src, file.fullpath, p.err);
 	if p.tok.ch <= 0 {
 		return true;
 	}
@@ -139,8 +147,11 @@ parse_file :: proc(p: ^Parser, file: ^ast.File) -> bool {
 
 	pkg_name := expect_token_after(p, .Ident, "package");
 	if pkg_name.kind == .Ident {
-		if is_blank_ident(pkg_name) {
+		switch name := pkg_name.text; {
+		case is_blank_ident(name):
 			error(p, pkg_name.pos, "invalid package name '_'");
+		case is_package_name_reserved(name), file.pkg != nil && file.pkg.kind != .Runtime && name == "runtime":
+			error(p, pkg_name.pos, "use of reserved package name '%s'", name);
 		}
 	}
 	p.file.pkg_name = pkg_name.text;
@@ -190,6 +201,50 @@ peek_token_kind :: proc(p: ^Parser, kind: tokenizer.Token_Kind, lookahead := 0) 
 	return;
 }
 
+peek_token :: proc(p: ^Parser, lookahead := 0) -> (tok: tokenizer.Token) {
+	prev_parser := p^;
+	defer p^ = prev_parser;
+
+	p.tok.err = nil;
+	for i := 0; i <= lookahead; i += 1 {
+		advance_token(p);
+	}
+	tok = p.curr_tok;
+	return;
+}
+skip_possible_newline :: proc(p: ^Parser) -> bool {
+	if .Insert_Semicolon not_in p.tok.flags {
+		return false;
+	}
+
+	prev := p.curr_tok;
+	if tokenizer.is_newline(prev) {
+		advance_token(p);
+		return true;
+	}
+	return false;
+}
+
+skip_possible_newline_for_literal :: proc(p: ^Parser) -> bool {
+	if .Insert_Semicolon not_in p.tok.flags {
+		return false;
+	}
+
+	curr_pos := p.curr_tok.pos;
+	if tokenizer.is_newline(p.curr_tok) {
+		next := peek_token(p);
+		if curr_pos.line+1 >= next.pos.line {
+			#partial switch next.kind {
+			case .Open_Brace, .Else, .Where:
+				advance_token(p);
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 
 next_token0 :: proc(p: ^Parser) -> bool {
 	p.curr_tok = tokenizer.scan(&p.tok);
@@ -232,7 +287,7 @@ consume_comment_group :: proc(p: ^Parser, n: int) -> (comments: ^ast.Comment_Gro
 	}
 
 	if len(list) > 0 {
-		comments = new(ast.Comment_Group);
+		comments = ast.new(ast.Comment_Group, list[0].pos, end_pos(list[len(list)-1]));
 		comments.list = list[:];
 		append(&p.file.comments, comments);
 	}
@@ -280,7 +335,7 @@ expect_token :: proc(p: ^Parser, kind: tokenizer.Token_Kind) -> tokenizer.Token 
 	prev := p.curr_tok;
 	if prev.kind != kind {
 		e := tokenizer.to_string(kind);
-		g := tokenizer.to_string(prev.kind);
+		g := tokenizer.token_to_string(prev);
 		error(p, prev.pos, "expected '%s', got '%s'", e, g);
 	}
 	advance_token(p);
@@ -291,7 +346,7 @@ expect_token_after :: proc(p: ^Parser, kind: tokenizer.Token_Kind, msg: string) 
 	prev := p.curr_tok;
 	if prev.kind != kind {
 		e := tokenizer.to_string(kind);
-		g := tokenizer.to_string(prev.kind);
+		g := tokenizer.token_to_string(prev);
 		error(p, prev.pos, "expected '%s' after %s, got '%s'", e, msg, g);
 	}
 	advance_token(p);
@@ -300,8 +355,10 @@ expect_token_after :: proc(p: ^Parser, kind: tokenizer.Token_Kind, msg: string) 
 
 expect_operator :: proc(p: ^Parser) -> tokenizer.Token {
 	prev := p.curr_tok;
-	if !tokenizer.is_operator(prev.kind) {
-		g := tokenizer.to_string(prev.kind);
+	if prev.kind == .If || prev.kind == .When {
+		// okay
+	} else if !tokenizer.is_operator(prev.kind) {
+		g := tokenizer.token_to_string(prev);
 		error(p, prev.pos, "expected an operator, got '%s'", g);
 	}
 	advance_token(p);
@@ -322,16 +379,16 @@ is_blank_ident :: proc{
 	is_blank_ident_token,
 	is_blank_ident_node,
 };
-is_blank_ident_string :: inline proc(str: string) -> bool {
+is_blank_ident_string :: proc(str: string) -> bool {
 	return str == "_";
 }
-is_blank_ident_token :: inline proc(tok: tokenizer.Token) -> bool {
+is_blank_ident_token :: proc(tok: tokenizer.Token) -> bool {
 	if tok.kind == .Ident {
 		return is_blank_ident_string(tok.text);
 	}
 	return false;
 }
-is_blank_ident_node :: inline proc(node: ^ast.Node) -> bool {
+is_blank_ident_node :: proc(node: ^ast.Node) -> bool {
 	if ident, ok := node.derived.(ast.Ident); ok {
 		return is_blank_ident(ident.name);
 	}
@@ -358,7 +415,7 @@ is_semicolon_optional_for_node :: proc(p: ^Parser, node: ^ast.Node) -> bool {
 		return is_semicolon_optional_for_node(p, n.type);
 	case ast.Pointer_Type:
 		return is_semicolon_optional_for_node(p, n.elem);
-	case ast.Struct_Type, ast.Union_Type, ast.Enum_Type, ast.Bit_Field_Type:
+	case ast.Struct_Type, ast.Union_Type, ast.Enum_Type:
 		// Require semicolon within a procedure body
 		return p.curr_proc == nil;
 	case ast.Proc_Lit:
@@ -398,7 +455,16 @@ expect_semicolon :: proc(p: ^Parser, node: ^ast.Node) -> bool {
 	}
 
 	if node != nil {
-		if prev.pos.line != p.curr_tok.pos.line {
+		if .Insert_Semicolon in p.tok.flags  {
+			#partial switch p.curr_tok.kind {
+			case .Close_Brace, .Close_Paren, .Else, .EOF:
+				return true;
+			}
+
+			if is_semicolon_optional_for_node(p, node) {
+				return true;
+			}
+		} else if prev.pos.line != p.curr_tok.pos.line {
 			if is_semicolon_optional_for_node(p, node) {
 				return true;
 			}
@@ -418,7 +484,7 @@ expect_semicolon :: proc(p: ^Parser, node: ^ast.Node) -> bool {
 		}
 	}
 
-	error(p, prev.pos, "expected ';', got %s", tokenizer.to_string(p.curr_tok.kind));
+	error(p, prev.pos, "expected ';', got %s", tokenizer.token_to_string(p.curr_tok));
 	return false;
 }
 
@@ -466,6 +532,7 @@ parse_stmt_list :: proc(p: ^Parser) -> []^ast.Stmt {
 }
 
 parse_block_stmt :: proc(p: ^Parser, is_when: bool) -> ^ast.Stmt {
+	skip_possible_newline_for_literal(p);
 	if !is_when && p.curr_proc == nil {
 		error(p, p.curr_tok.pos, "you cannot use a block statement in the file scope");
 	}
@@ -493,6 +560,7 @@ parse_when_stmt :: proc(p: ^Parser) -> ^ast.When_Stmt {
 		body = parse_block_stmt(p, true);
 	}
 
+	skip_possible_newline_for_literal(p);
 	if allow_token(p, .Else) {
 		#partial switch p.curr_tok.kind {
 		case .When:
@@ -568,6 +636,9 @@ parse_if_stmt :: proc(p: ^Parser) -> ^ast.If_Stmt {
 		body = parse_block_stmt(p, false);
 	}
 
+	else_tok := p.curr_tok.pos;
+
+	skip_possible_newline_for_literal(p);
 	if allow_token(p, .Else) {
 		#partial switch p.curr_tok.kind {
 		case .If:
@@ -593,6 +664,7 @@ parse_if_stmt :: proc(p: ^Parser) -> ^ast.If_Stmt {
 	if_stmt.cond      = cond;
 	if_stmt.body      = body;
 	if_stmt.else_stmt = else_stmt;
+	if_stmt.else_pos = else_tok;
 	return if_stmt;
 }
 
@@ -725,6 +797,7 @@ parse_case_clause :: proc(p: ^Parser, is_type_switch: bool) -> ^ast.Case_Clause 
 	cc.list = list;
 	cc.terminator = terminator;
 	cc.body = stmts;
+	cc.case_pos = tok.pos;
 	return cc;
 }
 
@@ -786,6 +859,7 @@ parse_switch_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 		ts := ast.new(ast.Type_Switch_Stmt, tok.pos, body.end);
 		ts.tag  = tag;
 		ts.body = body;
+		ts.switch_pos = tok.pos;
 		return ts;
 	} else {
 		cond := convert_stmt_to_expr(p, tag, "switch expression");
@@ -793,6 +867,7 @@ parse_switch_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 		ts.init = init;
 		ts.cond = cond;
 		ts.body = body;
+		ts.switch_pos = tok.pos;
 		return ts;
 	}
 }
@@ -837,6 +912,8 @@ parse_attribute :: proc(p: ^Parser, tok: tokenizer.Token, open_kind, close_kind:
 	attribute.open  = open.pos;
 	attribute.elems = elems[:];
 	attribute.close = close.pos;
+
+	skip_possible_newline(p);
 
 	decl := parse_stmt(p);
 	switch d in &decl.derived {
@@ -973,12 +1050,75 @@ parse_foreign_decl :: proc(p: ^Parser) -> ^ast.Decl {
 }
 
 
+parse_unrolled_for_loop :: proc(p: ^Parser, inline_tok: tokenizer.Token) -> ^ast.Stmt {
+	for_tok := expect_token(p, .For);
+	val0, val1: ^ast.Expr;
+	in_tok: tokenizer.Token;
+	expr: ^ast.Expr;
+	body: ^ast.Stmt;
+
+	bad_stmt := false;
+
+	if p.curr_tok.kind != .In {
+		idents := parse_ident_list(p, false);
+		switch len(idents) {
+		case 1:
+			val0 = idents[0];
+		case 2:
+			val0, val1 = idents[0], idents[1];
+		case:
+			error(p, for_tok.pos, "expected either 1 or 2 identifiers");
+			bad_stmt = true;
+		}
+	}
+
+	in_tok = expect_token(p, .In);
+
+	prev_allow_range := p.allow_range;
+	prev_level := p.expr_level;
+	p.allow_range = true;
+	p.expr_level = -1;
+
+	expr = parse_expr(p, false);
+
+	p.expr_level = prev_level;
+	p.allow_range = prev_allow_range;
+
+	if allow_token(p, .Do) {
+		body = convert_stmt_to_body(p, parse_stmt(p));
+	} else {
+		body = parse_block_stmt(p, false);
+	}
+
+	if bad_stmt {
+		return ast.new(ast.Bad_Stmt, inline_tok.pos, end_pos(p.prev_tok));
+	}
+
+	range_stmt := ast.new(ast.Inline_Range_Stmt, inline_tok.pos, body.end);
+	range_stmt.inline_pos = inline_tok.pos;
+	range_stmt.for_pos = for_tok.pos;
+	range_stmt.val0 = val0;
+	range_stmt.val1 = val1;
+	range_stmt.in_pos = in_tok.pos;
+	range_stmt.expr = expr;
+	range_stmt.body = body;
+	return range_stmt;
+}
+
 parse_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 	#partial switch p.curr_tok.kind {
+
+	case .Inline:
+		if peek_token_kind(p, .For) {
+			inline_tok := expect_token(p, .Inline);
+			return parse_unrolled_for_loop(p, inline_tok);
+		}
+		fallthrough;
 	// Operands
 	case .Context, // Also allows for 'context = '
 	     .Proc,
-	     .Inline, .No_Inline,
+	     .No_Inline,
+	     .Asm, // Inline assembly
 	     .Ident,
 	     .Integer, .Float, .Imag,
 	     .Rune, .String,
@@ -986,63 +1126,6 @@ parse_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 	     .Pointer,
 	     // Unary Expressions
 	     .Add, .Sub, .Xor, .Not, .And:
-
-	    if peek_token_kind(p, .For) {
-	    	inline_tok := expect_token(p, .Inline);
-	    	for_tok := expect_token(p, .For);
-	    	val0, val1: ^ast.Expr;
-	    	in_tok: tokenizer.Token;
-	    	expr: ^ast.Expr;
-	    	body: ^ast.Stmt;
-
-	    	bad_stmt := false;
-
-	    	if p.curr_tok.kind != .In {
-	    		idents := parse_ident_list(p, false);
-	    		switch len(idents) {
-	    		case 1:
-	    			val0 = idents[0];
-	    		case 2:
-	    			val0, val1 = idents[0], idents[1];
-	    		case:
-	    			error(p, for_tok.pos, "expected either 1 or 2 identifiers");
-	    			bad_stmt = true;
-	    		}
-	    	}
-
-	    	in_tok = expect_token(p, .In);
-
-	    	prev_allow_range := p.allow_range;
-	    	prev_level := p.expr_level;
-	    	p.allow_range = true;
-	    	p.expr_level = -1;
-
-	    	expr = parse_expr(p, false);
-
-	    	p.expr_level = prev_level;
-	    	p.allow_range = prev_allow_range;
-
-	    	if allow_token(p, .Do) {
-	    		body = convert_stmt_to_body(p, parse_stmt(p));
-	    	} else {
-	    		body = parse_block_stmt(p, false);
-	    	}
-
-	    	if bad_stmt {
-				return ast.new(ast.Bad_Stmt, inline_tok.pos, end_pos(p.prev_tok));
-	    	}
-
-	    	range_stmt := ast.new(ast.Inline_Range_Stmt, inline_tok.pos, body.end);
-	    	range_stmt.inline_pos = inline_tok.pos;
-	    	range_stmt.for_pos = for_tok.pos;
-	    	range_stmt.val0 = val0;
-	    	range_stmt.val1 = val1;
-	    	range_stmt.in_pos = in_tok.pos;
-	    	range_stmt.expr = expr;
-	    	range_stmt.body = body;
-	    	return range_stmt;
-	    }
-
 
 	    s := parse_simple_stmt(p, {Stmt_Allow_Flag.Label});
 	    expect_semicolon(p, s);
@@ -1092,7 +1175,7 @@ parse_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 
 		end := end_pos(tok);
 		if len(results) > 0 {
-			end = results[len(results)-1].pos;
+			end = results[len(results)-1].end;
 		}
 
 		rs := ast.new(ast.Return_Stmt, tok.pos, end);
@@ -1183,6 +1266,8 @@ parse_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 			es := ast.new(ast.Expr_Stmt, ce.pos, ce.end);
 			es.expr = ce;
 			return es;
+		case "unroll":
+			return parse_unrolled_for_loop(p, tag);
 		case "include":
 			error(p, tag.pos, "#include is not a valid import declaration kind. Did you meant 'import'?");
 			return ast.new(ast.Bad_Stmt, tok.pos, end_pos(tag));
@@ -1204,7 +1289,7 @@ parse_stmt :: proc(p: ^Parser) -> ^ast.Stmt {
 	}
 
 	tok := advance_token(p);
-	error(p, tok.pos, "expected a statement, got %s", tokenizer.to_string(tok.kind));
+	error(p, tok.pos, "expected a statement, got %s", tokenizer.token_to_string(tok));
 	s := ast.new(ast.Bad_Stmt, tok.pos, end_pos(tok));
 	return s;
 }
@@ -1597,7 +1682,7 @@ parse_field_list :: proc(p: ^Parser, follow: tokenizer.Token_Kind, allowed_flags
 	                     seen_ellipsis: ^bool, fields: ^[dynamic]^ast.Field,
 	                     docs: ^ast.Comment_Group,
 	                     names: []^ast.Expr,
-	                     allowed_flags, set_flags: ast.Field_Flags
+	                     allowed_flags, set_flags: ast.Field_Flags,
 	                     ) -> bool {
 
 		expect_field_separator :: proc(p: ^Parser, param: ^ast.Expr) -> bool {
@@ -1829,13 +1914,8 @@ string_to_calling_convention :: proc(s: string) -> ast.Proc_Calling_Convention {
 	case "fast", "fastcall":
 		return .Fast_Call;
 
-	case "pure":
-		return .Pure;
 	case "none":
 		return .None;
-	case "pure_none":
-		return .Pure_None;
-
 	}
 	return .Invalid;
 }
@@ -1931,7 +2011,41 @@ check_poly_params_for_type :: proc(p: ^Parser, poly_params: ^ast.Field_List, tok
 	}
 }
 
+parse_inlining_operand :: proc(p: ^Parser, lhs: bool, tok: tokenizer.Token) -> ^ast.Expr {
+	expr := parse_unary_expr(p, lhs);
 
+	pi := ast.Proc_Inlining.None;
+	#partial switch tok.kind {
+	case .Inline:
+		pi = .Inline;
+	case .No_Inline:
+		pi = .No_Inline;
+	case .Ident:
+		switch tok.text {
+		case "force_inline":
+			pi = .Inline;
+		case "force_no_inline":
+			pi = .No_Inline;
+		}
+	}
+
+	switch e in &ast.unparen_expr(expr).derived {
+	case ast.Proc_Lit:
+		if e.inlining != .None && e.inlining != pi {
+			error(p, expr.pos, "both 'inline' and 'no_inline' cannot be applied to a procedure literal");
+		}
+		e.inlining = pi;
+	case ast.Call_Expr:
+		if e.inlining != .None && e.inlining != pi {
+			error(p, expr.pos, "both 'inline' and 'no_inline' cannot be applied to a procedure call");
+		}
+		e.inlining = pi;
+	case:
+		error(p, tok.pos, "'%s' must be followed by a procedure literal or call", tok.text);
+		return ast.new(ast.Bad_Expr, tok.pos, expr.end);
+	}
+	return expr;
+}
 
 parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 	#partial switch p.curr_tok.kind {
@@ -1956,13 +2070,6 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 	     bl := ast.new(ast.Basic_Lit, tok.pos, end_pos(tok));
 	     bl.tok = tok;
 	     return bl;
-
-
-	case .Size_Of, .Align_Of, .Offset_Of:
-		tok := advance_token(p);
-		expr := ast.new(ast.Implicit, tok.pos, end_pos(tok));
-		expr.tok = tok;
-		return parse_call_expr(p, expr);
 
 	case .Open_Brace:
 		if !lhs {
@@ -1990,13 +2097,6 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 		dt.type = type;
 		return dt;
 
-	case .Opaque:
-		tok := advance_token(p);
-		type := parse_type(p);
-		ot := ast.new(ast.Opaque_Type, tok.pos, type.end);
-		ot.tok  = tok.kind;
-		ot.type = type;
-		return ot;
 	case .Hash:
 		tok := expect_token(p, .Hash);
 		name := expect_token(p, .Ident);
@@ -2080,6 +2180,8 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 			rt.type = type;
 			return rt;
 
+		case "force_inline", "force_no_inline":
+			return parse_inlining_operand(p, lhs, tok);
 		case:
 			expr := parse_expr(p, lhs);
 			te := ast.new(ast.Tag_Expr, tok.pos, expr.pos);
@@ -2091,32 +2193,7 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 
 	case .Inline, .No_Inline:
 		tok := advance_token(p);
-		expr := parse_unary_expr(p, lhs);
-
-		pi := ast.Proc_Inlining.None;
-		#partial switch tok.kind {
-		case .Inline:
-			pi = ast.Proc_Inlining.Inline;
-		case .No_Inline:
-			pi = ast.Proc_Inlining.No_Inline;
-		}
-
-		switch e in &ast.unparen_expr(expr).derived {
-		case ast.Proc_Lit:
-			if e.inlining != ast.Proc_Inlining.None && e.inlining != pi {
-				error(p, expr.pos, "both 'inline' and 'no_inline' cannot be applied to a procedure literal");
-			}
-			e.inlining = pi;
-		case ast.Call_Expr:
-			if e.inlining != ast.Proc_Inlining.None && e.inlining != pi {
-				error(p, expr.pos, "both 'inline' and 'no_inline' cannot be applied to a procedure call");
-			}
-			e.inlining = pi;
-		case:
-			error(p, tok.pos, "'%s' must be followed by a procedure literal or call", tok.text);
-			return ast.new(ast.Bad_Expr, tok.pos, expr.end);
-		}
-		return expr;
+		return parse_inlining_operand(p, lhs, tok);
 
 	case .Proc:
 		tok := expect_token(p, .Proc);
@@ -2156,7 +2233,10 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 
 		where_token: tokenizer.Token;
 		where_clauses: []^ast.Expr;
-		if (p.curr_tok.kind == .Where) {
+
+		skip_possible_newline_for_literal(p);
+
+		if p.curr_tok.kind == .Where {
 			where_token = expect_token(p, .Where);
 			prev_level := p.expr_level;
 			p.expr_level = -1;
@@ -2224,25 +2304,6 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 		ti.tok = tok.kind;
 		ti.specialization = nil;
 		return ti;
-
-	case .Type_Of:
-		tok := advance_token(p);
-		i := ast.new(ast.Implicit, tok.pos, end_pos(tok));
-		i.tok = tok;
-		type: ^ast.Expr = parse_call_expr(p, i);
-		for p.curr_tok.kind == .Period {
-			period := advance_token(p);
-
-			field := parse_ident(p);
-			sel := ast.new(ast.Selector_Expr, period.pos, field.end);
-			sel.expr = type;
-			sel.field = field;
-
-			type = sel;
-		}
-
-		return type;
-
 
 	case .Pointer:
 		tok := expect_token(p, .Pointer);
@@ -2351,12 +2412,15 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 
 		where_token: tokenizer.Token;
 		where_clauses: []^ast.Expr;
-		if (p.curr_tok.kind == .Where) {
+
+		skip_possible_newline_for_literal(p);
+
+		if p.curr_tok.kind == .Where {
 			where_token = expect_token(p, .Where);
-			prev_level := p.expr_level;
+			where_prev_level := p.expr_level;
 			p.expr_level = -1;
 			where_clauses = parse_rhs_expr_list(p);
-			p.expr_level = prev_level;
+			p.expr_level = where_prev_level;
 		}
 
 		expect_token(p, .Open_Brace);
@@ -2414,12 +2478,15 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 
 		where_token: tokenizer.Token;
 		where_clauses: []^ast.Expr;
-		if (p.curr_tok.kind == .Where) {
+
+		skip_possible_newline_for_literal(p);
+
+		if p.curr_tok.kind == .Where {
 			where_token = expect_token(p, .Where);
-			prev_level := p.expr_level;
+			where_prev_level := p.expr_level;
 			p.expr_level = -1;
 			where_clauses = parse_rhs_expr_list(p);
-			p.expr_level = prev_level;
+			p.expr_level = where_prev_level;
 		}
 
 		variants: [dynamic]^ast.Expr;
@@ -2465,59 +2532,6 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 		et.close = close.pos;
 		return et;
 
-	case .Bit_Field:
-		tok := expect_token(p, .Bit_Field);
-
-		fields: [dynamic]^ast.Field_Value;
-		align: ^ast.Expr;
-
-		prev_level := p.expr_level;
-		p.expr_level = -1;
-
-		for allow_token(p, .Hash) {
-			tag := expect_token_after(p, .Ident, "#");
-			switch tag.text {
-			case "align":
-				if align != nil {
-					error(p, tag.pos, "duplicate bit_field tag '#%s", tag.text);
-				}
-				align = parse_expr(p, true);
-			case:
-				error(p, tag.pos, "invalid bit_field tag '#%s", tag.text);
-			}
-		}
-
-		p.expr_level = prev_level;
-
-		open := expect_token_after(p, .Open_Brace, "bit_field");
-
-		for p.curr_tok.kind != .Close_Brace && p.curr_tok.kind != .EOF {
-			name := parse_ident(p);
-			colon := expect_token(p, .Colon);
-			value := parse_expr(p, true);
-
-			fv := ast.new(ast.Field_Value, name.pos, value.end);
-			fv.field = name;
-			fv.sep   = colon.pos;
-			fv.value = value;
-			append(&fields, fv);
-
-			if !allow_token(p, .Comma) {
-				break;
-			}
-		}
-
-		close := expect_token(p, .Close_Brace);
-
-		bft := ast.new(ast.Bit_Field_Type, tok.pos, end_pos(close));
-		bft.tok_pos = tok.pos;
-		bft.open    = open.pos;
-		bft.fields  = fields[:];
-		bft.close   = close.pos;
-		bft.align   = align;
-
-		return bft;
-
 	case .Bit_Set:
 		tok := expect_token(p, .Bit_Set);
 		open := expect_token(p, .Open_Bracket);
@@ -2543,6 +2557,89 @@ parse_operand :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 		bst.close = close.pos;
 		return bst;
 
+	case .Asm:
+		tok := expect_token(p, .Asm);
+
+		param_types: [dynamic]^ast.Expr;
+		return_type: ^ast.Expr;
+		if allow_token(p, .Open_Paren) {
+			for p.curr_tok.kind != .Close_Paren && p.curr_tok.kind != .EOF {
+				t := parse_type(p);
+				append(&param_types, t);
+				if p.curr_tok.kind != .Comma ||
+				   p.curr_tok.kind == .EOF {
+					break;
+				}
+				advance_token(p);
+			}
+			expect_token(p, .Close_Paren);
+
+			if allow_token(p, .Arrow_Right) {
+				return_type = parse_type(p);
+			}
+		}
+
+		has_side_effects := false;
+		is_align_stack := false;
+		dialect := ast.Inline_Asm_Dialect.Default;
+		for allow_token(p, .Hash) {
+			if p.curr_tok.kind == .Ident {
+				name := advance_token(p);
+				switch name.text {
+				case "side_effects":
+					if has_side_effects {
+						error(p, tok.pos, "duplicate directive on inline asm expression: '#side_effects'");
+					}
+					has_side_effects = true;
+				case "align_stack":
+					if is_align_stack {
+						error(p, tok.pos, "duplicate directive on inline asm expression: '#align_stack'");
+					}
+					is_align_stack = true;
+				case "att":
+					if dialect == .ATT {
+						error(p, tok.pos, "duplicate directive on inline asm expression: '#att'");
+					} else if dialect != .Default {
+						error(p, tok.pos, "conflicting asm dialects");
+					} else {
+						dialect = .ATT;
+					}
+				case "intel":
+					if dialect == .Intel {
+						error(p, tok.pos, "duplicate directive on inline asm expression: '#intel'");
+					} else if dialect != .Default {
+						error(p, tok.pos, "conflicting asm dialects");
+					} else {
+						dialect = .Intel;
+					}
+				}
+
+			} else {
+				error(p, p.curr_tok.pos, "expected an identifier after hash");
+			}
+		}
+
+		open := expect_token(p, .Open_Brace);
+		asm_string := parse_expr(p, false);
+		expect_token(p, .Comma);
+		constraints_string := parse_expr(p, false);
+		allow_token(p, .Comma);
+		close := expect_token(p, .Close_Brace);
+
+		e := ast.new(ast.Inline_Asm_Expr, tok.pos, end_pos(close));
+		e.tok                = tok;
+		e.param_types        = param_types[:];
+		e.return_type        = return_type;
+		e.constraints_string = constraints_string;
+		e.has_side_effects   = has_side_effects;
+		e.is_align_stack     = is_align_stack;
+		e.dialect            = dialect;
+		e.open               = open.pos;
+		e.asm_string         = asm_string;
+		e.close              = close.pos;
+
+		return e;
+
 	}
 
 	return nil;
@@ -2563,7 +2660,6 @@ is_literal_type :: proc(expr: ^ast.Expr) -> bool {
 		ast.Enum_Type,
 		ast.Dynamic_Array_Type,
 		ast.Map_Type,
-		ast.Bit_Field_Type,
 		ast.Bit_Set_Type,
 		ast.Call_Expr:
 		return true;
@@ -2628,7 +2724,7 @@ parse_literal_value :: proc(p: ^Parser, type: ^ast.Expr) -> ^ast.Comp_Lit {
 	return lit;
 }
 
-parse_call_expr :: proc(p: ^Parser, operand: ^ast.Expr) -> ^ast.Call_Expr {
+parse_call_expr :: proc(p: ^Parser, operand: ^ast.Expr) -> ^ast.Expr {
 	args: [dynamic]^ast.Expr;
 
 	ellipsis: tokenizer.Token;
@@ -2686,6 +2782,14 @@ parse_call_expr :: proc(p: ^Parser, operand: ^ast.Expr) -> ^ast.Call_Expr {
 	ce.ellipsis = ellipsis;
 	ce.close    = close.pos;
 
+	o := ast.unparen_expr(operand);
+	if se, ok := o.derived.(ast.Selector_Expr); ok && se.op.kind == .Arrow_Right {
+		sce := ast.new(ast.Selector_Call_Expr, ce.pos, ce.end);
+		sce.expr = o;
+		sce.call = ce;
+		return sce;
+	}
+
 	return ce;
 }
 
@@ -2739,7 +2843,7 @@ parse_atom_expr :: proc(p: ^Parser, value: ^ast.Expr, lhs: bool) -> (operand: ^a
 			case .Colon:
 				interval = advance_token(p);
 				is_slice_op = true;
-				if (p.curr_tok.kind != .Close_Bracket && p.curr_tok.kind != .EOF) {
+				if p.curr_tok.kind != .Close_Bracket && p.curr_tok.kind != .EOF {
 					indicies[1] = parse_expr(p, false);
 				}
 			}
@@ -2776,6 +2880,7 @@ parse_atom_expr :: proc(p: ^Parser, value: ^ast.Expr, lhs: bool) -> (operand: ^a
 
 				sel := ast.new(ast.Selector_Expr, operand.pos, field.end);
 				sel.expr  = operand;
+				sel.op = tok;
 				sel.field = field;
 
 				operand = sel;
@@ -2805,6 +2910,24 @@ parse_atom_expr :: proc(p: ^Parser, value: ^ast.Expr, lhs: bool) -> (operand: ^a
 
 				operand = ta;
 
+			case:
+				error(p, p.curr_tok.pos, "expected a selector");
+				advance_token(p);
+				operand = ast.new(ast.Bad_Expr, operand.pos, end_pos(tok));
+			}
+
+		case .Arrow_Right:
+			tok := expect_token(p, .Arrow_Right);
+			#partial switch p.curr_tok.kind {
+			case .Ident:
+				field := parse_ident(p);
+
+				sel := ast.new(ast.Selector_Expr, operand.pos, field.end);
+				sel.expr  = operand;
+				sel.op = tok;
+				sel.field = field;
+
+				operand = sel;
 			case:
 				error(p, p.curr_tok.pos, "expected a selector");
 				advance_token(p);
@@ -2886,7 +3009,13 @@ parse_unary_expr :: proc(p: ^Parser, lhs: bool) -> ^ast.Expr {
 	return parse_atom_expr(p, parse_operand(p, lhs), lhs);
 }
 parse_binary_expr :: proc(p: ^Parser, lhs: bool, prec_in: int) -> ^ast.Expr {
+	start_pos := p.curr_tok.pos;
 	expr := parse_unary_expr(p, lhs);
+
+	if expr == nil {
+		return ast.new(ast.Bad_Expr, start_pos, end_pos(p.prev_tok));
+	}
+
 	for prec := token_precedence(p, p.curr_tok.kind); prec >= prec_in; prec -= 1 {
 		for {
 			op := p.curr_tok;

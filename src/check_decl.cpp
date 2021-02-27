@@ -96,9 +96,6 @@ Type *check_init_variable(CheckerContext *ctx, Entity *e, Operand *operand, Stri
 			e->type = t_invalid;
 			return nullptr;
 		}
-		if (is_type_bit_field_value(t)) {
-			t = default_bit_field_value_type(t);
-		}
 		GB_ASSERT(is_type_typed(t));
 		e->type = t;
 	}
@@ -113,7 +110,7 @@ Type *check_init_variable(CheckerContext *ctx, Entity *e, Operand *operand, Stri
 	return e->type;
 }
 
-void check_init_variables(CheckerContext *ctx, Entity **lhs, isize lhs_count, Array<Ast *> const &inits, String context_name) {
+void check_init_variables(CheckerContext *ctx, Entity **lhs, isize lhs_count, Slice<Ast *> const &inits, String context_name) {
 	if ((lhs == nullptr || lhs_count == 0) && inits.count == 0) {
 		return;
 	}
@@ -121,8 +118,7 @@ void check_init_variables(CheckerContext *ctx, Entity **lhs, isize lhs_count, Ar
 
 	// NOTE(bill): If there is a bad syntax error, rhs > lhs which would mean there would need to be
 	// an extra allocation
-	auto operands = array_make<Operand>(ctx->allocator, 0, 2*lhs_count);
-	defer (array_free(&operands));
+	auto operands = array_make<Operand>(temporary_allocator(), 0, 2*lhs_count);
 	check_unpack_arguments(ctx, lhs, lhs_count, &operands, inits, true, false);
 
 	isize rhs_count = operands.count;
@@ -169,18 +165,6 @@ void check_init_constant(CheckerContext *ctx, Entity *e, Operand *operand) {
 		return;
 	}
 
-#if 0
-	if (!is_type_constant_type(operand->type)) {
-		gbString type_str = type_to_string(operand->type);
-		error(operand->expr, "Invalid constant type: '%s'", type_str);
-		gb_string_free(type_str);
-		if (e->type == nullptr) {
-			e->type = t_invalid;
-		}
-		return;
-	}
-#endif
-
 	if (e->type == nullptr) { // NOTE(bill): type inference
 		e->type = operand->type;
 	}
@@ -217,7 +201,6 @@ bool is_type_distinct(Ast *node) {
 	case Ast_StructType:
 	case Ast_UnionType:
 	case Ast_EnumType:
-	case Ast_BitFieldType:
 	case Ast_ProcType:
 		return true;
 
@@ -226,9 +209,6 @@ bool is_type_distinct(Ast *node) {
 	case Ast_DynamicArrayType:
 	case Ast_MapType:
 		return false;
-
-	case Ast_OpaqueType:
-		return true;
 	}
 	return false;
 }
@@ -317,7 +297,6 @@ void check_type_decl(CheckerContext *ctx, Entity *e, Ast *init_expr, Type *def) 
 				break;
 			default:
 				error(e->token, "Only struct types can have custom atom operations");
-				gb_free(heap_allocator(), ac.atom_op_table);
 				break;
 			}
 		}
@@ -390,15 +369,7 @@ void check_const_decl(CheckerContext *ctx, Entity *e, Ast *type_expr, Ast *init,
 	e->flags |= EntityFlag_Visited;
 
 	if (type_expr) {
-		Type *t = check_type(ctx, type_expr);
-		if (!is_type_constant_type(t) && !is_type_proc(t)) {
-			gbString str = type_to_string(t);
-			error(type_expr, "Invalid constant type '%s'", str);
-			gb_string_free(str);
-			e->type = t_invalid;
-			return;
-		}
-		e->type = t;
+		e->type = check_type(ctx, type_expr);
 	}
 
 	Operand operand = {};
@@ -638,7 +609,7 @@ String handle_link_name(CheckerContext *ctx, Token token, String link_name, Stri
 			error(token, "'link_name' and 'link_prefix' cannot be used together");
 		} else {
 			isize len = link_prefix.len + token.string.len;
-			u8 *name = gb_alloc_array(ctx->allocator, u8, len+1);
+			u8 *name = gb_alloc_array(permanent_allocator(), u8, len+1);
 			gb_memmove(name, &link_prefix[0], link_prefix.len);
 			gb_memmove(name+link_prefix.len, &token.string[0], token.string.len);
 			name[len] = 0;
@@ -975,7 +946,7 @@ void check_proc_group_decl(CheckerContext *ctx, Entity *pg_entity, DeclInfo *d) 
 
 	ast_node(pg, ProcGroup, d->init_expr);
 
-	pge->entities = array_make<Entity*>(ctx->allocator, 0, pg->args.count);
+	pge->entities = array_make<Entity*>(permanent_allocator(), 0, pg->args.count);
 
 	// NOTE(bill): This must be set here to prevent cycles in checking if someone
 	// places the entity within itself
@@ -1009,11 +980,10 @@ void check_proc_group_decl(CheckerContext *ctx, Entity *pg_entity, DeclInfo *d) 
 			continue;
 		}
 
-		if (ptr_set_exists(&entity_set, e)) {
+		if (ptr_set_update(&entity_set, e)) {
 			error(arg, "Previous use of `%.*s` in procedure group", LIT(e->token.string));
 			continue;
 		}
-		ptr_set_add(&entity_set, e);
 		array_add(&pge->entities, e);
 	}
 
@@ -1205,9 +1175,6 @@ void check_proc_body(CheckerContext *ctx_, Token token, DeclInfo *decl, Type *ty
 		switch (type->Proc.calling_convention) {
 		case ProcCC_None:
 			error(body, "Procedures with the calling convention \"none\" are not allowed a body");
-			break;
-		case ProcCC_PureNone:
-			error(body, "Procedures with the calling convention \"pure_none\" are not allowed a body");
 			break;
 		}
 	}

@@ -1,4 +1,5 @@
 // This is purely for documentation
+//+ignore
 package intrinsics
 
 // Types
@@ -114,13 +115,12 @@ type_is_ordered_numeric :: proc($T: typeid) -> bool ---
 type_is_indexable       :: proc($T: typeid) -> bool ---
 type_is_sliceable       :: proc($T: typeid) -> bool ---
 type_is_comparable      :: proc($T: typeid) -> bool ---
-type_is_simple_compare  :: proc($T: typeid) -> bool --- // easily compared using memcmp
+type_is_simple_compare  :: proc($T: typeid) -> bool --- // easily compared using memcmp (== and !=)
 type_is_dereferenceable :: proc($T: typeid) -> bool ---
 type_is_valid_map_key   :: proc($T: typeid) -> bool ---
 
 type_is_named            :: proc($T: typeid) -> bool ---
 type_is_pointer          :: proc($T: typeid) -> bool ---
-type_is_opaque           :: proc($T: typeid) -> bool ---
 type_is_array            :: proc($T: typeid) -> bool ---
 type_is_enumerated_array :: proc($T: typeid) -> bool ---
 type_is_slice            :: proc($T: typeid) -> bool ---
@@ -130,8 +130,6 @@ type_is_struct           :: proc($T: typeid) -> bool ---
 type_is_union            :: proc($T: typeid) -> bool ---
 type_is_enum             :: proc($T: typeid) -> bool ---
 type_is_proc             :: proc($T: typeid) -> bool ---
-type_is_bit_field        :: proc($T: typeid) -> bool ---
-type_is_bit_field_value  :: proc($T: typeid) -> bool ---
 type_is_bit_set          :: proc($T: typeid) -> bool ---
 type_is_simd_vector      :: proc($T: typeid) -> bool ---
 
@@ -152,3 +150,6 @@ type_polymorphic_record_parameter_value :: proc($T: typeid, index: int) -> $V --
 
 
 type_field_index_of :: proc($T: typeid, $name: string) -> uintptr ---
+
+type_equal_proc  :: proc($T: typeid) -> (equal:  proc "contextless" (rawptr, rawptr) -> bool) ---
+type_hasher_proc :: proc($T: typeid) -> (hasher: proc "contextless" (data: rawptr, seed: uintptr) -> uintptr) ---

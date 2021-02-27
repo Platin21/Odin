@@ -8,7 +8,8 @@ SEPARATOR :: '\\';
 SEPARATOR_STRING :: `\`;
 LIST_SEPARATOR :: ';';
 
-reserved_names := []string{
+@(private)
+reserved_names := [?]string{
 	"CON", "PRN", "AUX", "NUL",
 	"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
 	"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -40,7 +41,8 @@ is_abs :: proc(path: string) -> bool {
 		return false;
 	}
 
-	path := path[l:];
+	path := path;
+	path = path[l:];
 	if path == "" {
 		return false;
 	}
@@ -84,56 +86,6 @@ abs :: proc(path: string, allocator := context.allocator) -> (string, bool) {
 	p := clean(full_path, allocator);
 	return p, true;
 }
-
-split_list :: proc(path: string, allocator := context.allocator) -> []string {
-	if path == "" {
-		return nil;
-	}
-
-	start: int;
-	quote: bool;
-
-	start, quote = 0, false;
-	count := 0;
-
-	for i := 0; i < len(path); i += 1 {
-		c := path[i];
-		switch {
-		case c == '"':
-			quote = !quote;
-		case c == LIST_SEPARATOR && !quote:
-			count += 1;
-		}
-	}
-
-	start, quote = 0, false;
-	list := make([]string, count, allocator);
-	index := 0;
-	for i := 0; i < len(path); i += 1 {
-		c := path[i];
-		switch {
-		case c == '"':
-			quote = !quote;
-		case c == LIST_SEPARATOR && !quote:
-			list[index] = path[start:i];
-			index += 1;
-			start = i + 1;
-		}
-	}
-	assert(index == count);
-
-	for s, i in list {
-		s, new := strings.replace_all(s, `"`, ``, allocator);
-		if !new {
-			s = strings.clone(s, allocator);
-		}
-		list[i] = s;
-	}
-
-	return list;
-}
-
-
 
 
 join :: proc(elems: ..string, allocator := context.allocator) -> string {

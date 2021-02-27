@@ -22,9 +22,7 @@ Proc_Calling_Convention :: enum i32 {
 	C_Decl,
 	Std_Call,
 	Fast_Call,
-	Pure,
 	None,
-	Pure_None,
 
 	Foreign_Block_Default = -1,
 }
@@ -35,18 +33,61 @@ Node_State_Flag :: enum {
 }
 Node_State_Flags :: distinct bit_set[Node_State_Flag];
 
-
-Comment_Group :: struct {
-	list: []tokenizer.Token,
-}
-
 Node :: struct {
 	pos:         tokenizer.Pos,
 	end:         tokenizer.Pos,
-	derived:     any,
 	state_flags: Node_State_Flags,
+	derived:     any,
 }
 
+Comment_Group :: struct {
+	using node: Node,
+	list: []tokenizer.Token,
+}
+
+Package_Kind :: enum {
+	Normal,
+	Runtime,
+	Init,
+}
+
+Package :: struct {
+	using node: Node,
+	kind:     Package_Kind,
+	id:       int,
+	name:     string,
+	fullpath: string,
+	files:    map[string]^File,
+
+	user_data: rawptr,
+}
+
+File :: struct {
+	using node: Node,
+	id: int,
+	pkg: ^Package,
+
+	fullpath: string,
+	src:      []byte,
+
+	docs: ^Comment_Group,
+
+	pkg_decl:  ^Package_Decl,
+	pkg_token: tokenizer.Token,
+	pkg_name:  string,
+
+	decls:   [dynamic]^Stmt,
+	imports: [dynamic]^Import_Decl,
+	directive_count: int,
+
+	comments: [dynamic]^Comment_Group,
+
+	syntax_warning_count: int,
+	syntax_error_count:   int,
+}
+
+
+// Base Types
 
 Expr :: struct {
 	using expr_base: Node,
@@ -146,12 +187,20 @@ Paren_Expr :: struct {
 Selector_Expr :: struct {
 	using node: Expr,
 	expr:  ^Expr,
+	op:    tokenizer.Token,
 	field: ^Ident,
 }
 
 Implicit_Selector_Expr :: struct {
 	using node: Expr,
 	field: ^Ident,
+}
+
+Selector_Call_Expr :: struct {
+	using node: Expr,
+	expr: ^Expr,
+	call: ^Call_Expr,
+	modified_call: bool,
 }
 
 Index_Expr :: struct {
@@ -206,9 +255,9 @@ Ternary_Expr :: struct {
 
 Ternary_If_Expr :: struct {
 	using node: Expr,
-	x: ^Expr,
+	x:    ^Expr,
 	op1:  tokenizer.Token,
-	cond:    ^Expr,
+	cond: ^Expr,
 	op2:  tokenizer.Token,
 	y:    ^Expr,
 }
@@ -217,7 +266,7 @@ Ternary_When_Expr :: struct {
 	using node: Expr,
 	x: ^Expr,
 	op1:  tokenizer.Token,
-	cond:    ^Expr,
+	cond: ^Expr,
 	op2:  tokenizer.Token,
 	y:    ^Expr,
 }
@@ -244,6 +293,27 @@ Auto_Cast :: struct {
 	using node: Expr,
 	op:   tokenizer.Token,
 	expr: ^Expr,
+}
+
+Inline_Asm_Dialect :: enum u8 {
+	Default = 0,
+	ATT     = 1,
+	Intel   = 2,
+}
+
+
+Inline_Asm_Expr :: struct {
+	using node: Expr,
+	tok:                tokenizer.Token,
+	param_types:        []^Expr,
+	return_type:        ^Expr,
+	has_side_effects:   bool,
+	is_align_stack:     bool,
+	dialect:            Inline_Asm_Dialect,
+	open:               tokenizer.Pos,
+	constraints_string: ^Expr,
+	asm_string:         ^Expr,
+	close:              tokenizer.Pos,
 }
 
 
@@ -296,6 +366,7 @@ If_Stmt :: struct {
 	init:      ^Stmt,
 	cond:      ^Expr,
 	body:      ^Stmt,
+	else_pos:  tokenizer.Pos,
 	else_stmt: ^Stmt,
 }
 
@@ -442,12 +513,12 @@ Foreign_Block_Decl :: struct {
 Foreign_Import_Decl :: struct {
 	using node: Decl,
 	docs:            ^Comment_Group,
+	attributes:      [dynamic]^Attribute, // dynamic as parsing will add to them lazily
 	foreign_tok:     tokenizer.Token,
 	import_tok:      tokenizer.Token,
 	name:            ^Ident,
 	collection_name: string,
 	fullpaths:       []string,
-	attributes:      [dynamic]^Attribute, // dynamic as parsing will add to them lazily
 	comment:         ^Comment_Group,
 }
 
@@ -461,7 +532,7 @@ unparen_expr :: proc(expr: ^Expr) -> (val: ^Expr) {
 	}
 	for {
 		e, ok := val.derived.(Paren_Expr);
-		if !ok {
+		if !ok || e.expr == nil {
 			break;
 		}
 		val = e.expr;
@@ -559,12 +630,6 @@ Distinct_Type :: struct {
 	type: ^Expr,
 }
 
-Opaque_Type :: struct {
-	using node: Expr,
-	tok:  tokenizer.Token_Kind,
-	type: ^Expr,
-}
-
 Poly_Type :: struct {
 	using node: Expr,
 	dollar:         tokenizer.Pos,
@@ -613,23 +678,23 @@ Struct_Type :: struct {
 	tok_pos:       tokenizer.Pos,
 	poly_params:   ^Field_List,
 	align:         ^Expr,
-	fields:        ^Field_List,
-	name_count:    int,
 	where_token:   tokenizer.Token,
 	where_clauses: []^Expr,
 	is_packed:     bool,
 	is_raw_union:  bool,
+	fields:        ^Field_List,
+	name_count:    int,
 }
 
 Union_Type :: struct {
 	using node: Expr,
-	tok_pos:     tokenizer.Pos,
-	poly_params: ^Field_List,
-	align:       ^Expr,
-	variants:    []^Expr,
-	where_token: tokenizer.Token,
+	tok_pos:       tokenizer.Pos,
+	poly_params:   ^Field_List,
+	align:         ^Expr,
+	is_maybe:      bool,
+	where_token:   tokenizer.Token,
 	where_clauses: []^Expr,
-	is_maybe:	 bool,
+	variants:      []^Expr,
 }
 
 Enum_Type :: struct {
@@ -641,15 +706,6 @@ Enum_Type :: struct {
 	close:     tokenizer.Pos,
 
 	is_using:  bool,
-}
-
-Bit_Field_Type :: struct {
-	using node: Expr,
-	tok_pos: tokenizer.Pos,
-	align:   ^Expr,
-	open:    tokenizer.Pos,
-	fields:  []^Field_Value, // Field_Value with ':' rather than '='
-	close:   tokenizer.Pos,
 }
 
 Bit_Set_Type :: struct {

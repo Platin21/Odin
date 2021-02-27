@@ -90,7 +90,7 @@ encode_rune :: proc(c: rune) -> ([4]u8, int) {
 	return buf, 4;
 }
 
-decode_rune_in_string :: inline proc(s: string) -> (rune, int) {
+decode_rune_in_string :: #force_inline proc(s: string) -> (rune, int) {
 	return decode_rune(transmute([]u8)s);
 }
 decode_rune :: proc(s: []u8) -> (rune, int) {
@@ -161,7 +161,7 @@ runes_to_string :: proc(runes: []rune, allocator := context.allocator) -> string
 }
 
 
-decode_last_rune_in_string :: inline proc(s: string) -> (rune, int) {
+decode_last_rune_in_string :: #force_inline proc(s: string) -> (rune, int) {
 	return decode_last_rune(transmute([]u8)s);
 }
 decode_last_rune :: proc(s: []u8) -> (rune, int) {
@@ -293,11 +293,11 @@ valid_string :: proc(s: string) -> bool {
 	return true;
 }
 
-rune_start :: inline proc(b: u8) -> bool {
+rune_start :: #force_inline proc(b: u8) -> bool {
 	return b&0xc0 != 0x80;
 }
 
-rune_count_in_string :: inline proc(s: string) -> int {
+rune_count_in_string :: #force_inline proc(s: string) -> int {
 	return rune_count(transmute([]u8)s);
 }
 rune_count :: proc(s: []u8) -> int {
@@ -350,3 +350,44 @@ rune_size :: proc(r: rune) -> int {
 	}
 	return -1;
 }
+
+// full_rune reports if the bytes in b begin with a full utf-8 encoding of a rune or not
+// An invalid encoding is considered a full rune since it will convert as an error rune of width 1 (RUNE_ERROR)
+full_rune :: proc(b: []byte) -> bool {
+	n := len(b);
+	if n == 0 {
+		return false;
+	}
+	x := _first[b[0]];
+	if n >= int(x & 7) {
+		return true;
+	}
+	accept := accept_ranges[x>>4];
+	if n > 1 && (b[1] < accept.lo || accept.hi < b[1]) {
+		return true;
+	} else if n > 2 && (b[2] < LOCB || HICB < b[2]) {
+		return true;
+	}
+	return false;
+}
+
+// full_rune_in_string reports if the bytes in s begin with a full utf-8 encoding of a rune or not
+// An invalid encoding is considered a full rune since it will convert as an error rune of width 1 (RUNE_ERROR)
+full_rune_in_string :: proc(s: string) -> bool {
+	return full_rune(transmute([]byte)s);
+}
+
+
+_first := [256]u8{
+	0x00..0x7f = 0xf0, // ascii,    size 1
+	0x80..0xc1 = 0xf1, // invalid,  size 1
+	0xc2..0xdf = 0x02, // accept 1, size 2
+	0xe0       = 0x13, // accept 1, size 3
+	0xe1..0xec = 0x03, // accept 0, size 3
+	0xed       = 0x23, // accept 2, size 3
+	0xee..0xef = 0x03, // accept 0, size 3
+	0xf0       = 0x34, // accept 3, size 4
+	0xf1..0xf3 = 0x04, // accept 0, size 4
+	0xf4       = 0x44, // accept 4, size 4
+	0xf5..0xff = 0xf1, // ascii,    size 1
+};

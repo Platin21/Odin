@@ -42,6 +42,18 @@ print_string :: proc "contextless" (str: string) -> (int, _OS_Errno) {
 	return os_write(transmute([]byte)str);
 }
 
+print_strings :: proc "contextless" (args: ..string) -> (n: int, err: _OS_Errno) {
+	for str in args {
+		m: int;
+		m, err = os_write(transmute([]byte)str);
+		n += m;
+		if err != 0 {
+			break;
+		}
+	}
+	return;
+}
+
 print_byte :: proc "contextless" (b: byte) -> (int, _OS_Errno) {
 	return os_write([]byte{b});
 }
@@ -312,22 +324,6 @@ print_type :: proc "contextless" (ti: ^Type_Info) {
 		}
 		print_string("}");
 
-	case Type_Info_Bit_Field:
-		print_string("bit_field ");
-		if ti.align != 1 {
-			print_string("#align ");
-			print_u64(u64(ti.align));
-			print_byte(' ');
-		}
-		print_string(" {");
-		for name, i in info.names {
-			if i > 0 { print_string(", "); }
-			print_string(name);
-			print_string(": ");
-			print_u64(u64(info.bits[i]));
-		}
-		print_string("}");
-
 	case Type_Info_Bit_Set:
 		print_string("bit_set[");
 
@@ -349,9 +345,6 @@ print_type :: proc "contextless" (ti: ^Type_Info) {
 		}
 		print_byte(']');
 
-	case Type_Info_Opaque:
-		print_string("opaque ");
-		print_type(info.elem);
 
 	case Type_Info_Simd_Vector:
 		if info.is_x86_mmx {

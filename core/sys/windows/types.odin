@@ -3,6 +3,7 @@ package sys_windows
 import "core:c"
 
 c_char     :: c.char;
+c_uchar    :: c.uchar;
 c_int      :: c.int;
 c_uint     :: c.uint;
 c_long     :: c.long;
@@ -27,34 +28,67 @@ GROUP :: distinct c_uint;
 LARGE_INTEGER :: distinct c_longlong;
 LONG :: c_long;
 UINT :: c_uint;
-WCHAR :: wchar_t;
+INT  :: c_int;
+SHORT :: c_short;
 USHORT :: c_ushort;
+WCHAR :: wchar_t;
 SIZE_T :: uint;
+PSIZE_T :: ^SIZE_T;
 WORD :: u16;
 CHAR :: c_char;
 ULONG_PTR :: uint;
+PULONG_PTR :: ^ULONG_PTR;
+LPULONG_PTR :: ^ULONG_PTR;
 DWORD_PTR :: ULONG_PTR;
+LONG_PTR :: int;
 ULONG :: c_ulong;
 UCHAR :: BYTE;
+NTSTATUS :: c.long;
+
+UINT8  ::  u8;
+UINT16 :: u16;
+UINT32 :: u32;
+UINT64 :: u64;
+
+INT8  ::  i8;
+INT16 :: i16;
+INT32 :: i32;
+INT64 :: i64;
+
+
+ULONG64 :: u64;
+LONG64  :: i64;
 
 PDWORD_PTR :: ^DWORD_PTR;
 ATOM :: distinct WORD;
 
 wstring :: ^WCHAR;
 
-LPBOOL :: ^BOOL;
+PBYTE :: ^BYTE;
 LPBYTE :: ^BYTE;
+PBOOL :: ^BOOL;
+LPBOOL :: ^BOOL;
 LPCSTR :: cstring;
 LPCWSTR :: wstring;
 LPDWORD :: ^DWORD;
+PCSTR :: cstring;
+PCWSTR :: wstring;
+PDWORD :: ^DWORD;
 LPHANDLE :: ^HANDLE;
 LPOVERLAPPED :: ^OVERLAPPED;
 LPPROCESS_INFORMATION :: ^PROCESS_INFORMATION;
+PSECURITY_ATTRIBUTES :: ^SECURITY_ATTRIBUTES;
 LPSECURITY_ATTRIBUTES :: ^SECURITY_ATTRIBUTES;
 LPSTARTUPINFO :: ^STARTUPINFO;
 PVOID  :: rawptr;
 LPVOID :: rawptr;
+PINT :: ^INT;
+LPINT :: ^INT;
+PUINT :: ^UINT;
+LPUINT :: ^UINT;
 LPWCH :: ^WCHAR;
+LPWORD :: ^WORD;
+PULONG :: ^ULONG;
 LPWIN32_FIND_DATAW :: ^WIN32_FIND_DATAW;
 LPWSADATA :: ^WSADATA;
 LPWSAPROTOCOL_INFO :: ^WSAPROTOCOL_INFO;
@@ -76,6 +110,13 @@ ADDRESS_FAMILY :: USHORT;
 
 TRUE  :: BOOL(true);
 FALSE :: BOOL(false);
+
+SIZE :: struct {
+	cx: LONG,
+	cy: LONG,
+}
+PSIZE  :: ^SIZE;
+LPSIZE :: ^SIZE;
 
 FILE_ATTRIBUTE_READONLY: DWORD : 0x00000001;
 FILE_ATTRIBUTE_HIDDEN: DWORD : 0x00000002;
@@ -117,12 +158,12 @@ SYNCHRONIZE: DWORD : 0x00100000;
 GENERIC_READ: DWORD : 0x80000000;
 GENERIC_WRITE: DWORD : 0x40000000;
 STANDARD_RIGHTS_WRITE: DWORD : READ_CONTROL;
-FILE_GENERIC_WRITE: DWORD : STANDARD_RIGHTS_WRITE
-	| FILE_WRITE_DATA
-	| FILE_WRITE_ATTRIBUTES
-	| FILE_WRITE_EA
-	| FILE_APPEND_DATA
-	| SYNCHRONIZE;
+FILE_GENERIC_WRITE: DWORD : STANDARD_RIGHTS_WRITE |
+	FILE_WRITE_DATA |
+	FILE_WRITE_ATTRIBUTES |
+	FILE_WRITE_EA |
+	FILE_APPEND_DATA |
+	SYNCHRONIZE;
 
 FILE_FLAG_OPEN_REPARSE_POINT: DWORD : 0x00200000;
 FILE_FLAG_BACKUP_SEMANTICS: DWORD : 0x02000000;
@@ -498,6 +539,19 @@ GUID :: struct {
 	Data4: [8]BYTE,
 }
 
+LUID :: struct {
+	LowPart:  DWORD,
+	HighPart: LONG,
+}
+
+PLUID :: ^LUID;
+
+PGUID   :: ^GUID;
+PCGUID  :: ^GUID;
+LPGUID  :: ^GUID;
+LPCGUID :: ^GUID;
+
+
 WSAPROTOCOLCHAIN :: struct {
 	ChainLen: c_int,
 	ChainEntries: [MAX_PROTOCOL_CHAIN]DWORD,
@@ -721,15 +775,15 @@ SYSTEM_INFO :: struct {
 
 // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
 OSVERSIONINFOEXW :: struct {
-	os_version_info_size: ULONG,
-	major_version:        ULONG,
-	minor_version:        ULONG,
-	build_number:         ULONG,
-	platform_id :         ULONG,
-	service_pack_string:  [128]WCHAR,
-	service_pack_major:   USHORT,
-	service_pack_minor:   USHORT,
-	suite_mask:           USHORT,
-	product_type:         UCHAR,
-	reserved:             UCHAR,
-}
+    dwOSVersionInfoSize: ULONG,
+    dwMajorVersion:      ULONG,
+    dwMinorVersion:      ULONG,
+    dwBuildNumber:       ULONG,
+    dwPlatformId:        ULONG,
+    szCSDVersion:        [128]WCHAR,
+    wServicePackMajor:   USHORT,
+    wServicePackMinor:   USHORT,
+    wSuiteMask:          USHORT,
+    wProductType:        UCHAR,
+    wReserved:           UCHAR,
+};

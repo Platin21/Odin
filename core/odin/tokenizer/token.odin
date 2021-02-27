@@ -34,127 +34,118 @@ Token_Kind :: enum u32 {
 	Comment,
 
 	B_Literal_Begin,
-		Ident,
-		Integer,
-		Float,
-		Imag,
-		Rune,
-		String,
+		Ident,   // main
+		Integer, // 12345
+		Float,   // 123.45
+		Imag,    // 123.45i
+		Rune,    // 'a'
+		String,  // "abc"
 	B_Literal_End,
 
 	B_Operator_Begin,
-		Eq,
-		Not,
-		Hash,
-		At,
-		Dollar,
-		Pointer,
-		Question,
-		Add,
-		Sub,
-		Mul,
-		Quo,
-		Mod,
-		Mod_Mod,
-		And,
-		Or,
-		Xor,
-		And_Not,
-		Shl,
-		Shr,
+		Eq,       // =
+		Not,      // !
+		Hash,     // #
+		At,       // @
+		Dollar,   // $
+		Pointer,  // ^
+		Question, // ?
+		Add,      // +
+		Sub,      // -
+		Mul,      // *
+		Quo,      // /
+		Mod,      // %
+		Mod_Mod,  // %%
+		And,      // &
+		Or,       // |
+		Xor,      // ~
+		And_Not,  // &~
+		Shl,      // <<
+		Shr,      // >>
 
-		Cmp_And,
-		Cmp_Or,
+		Cmp_And,  // &&
+		Cmp_Or,   // ||
 
 	B_Assign_Op_Begin,
-		Add_Eq,
-		Sub_Eq,
-		Mul_Eq,
-		Quo_Eq,
-		Mod_Eq,
-		Mod_Mod_Eq,
-		And_Eq,
-		Or_Eq,
-		Xor_Eq,
-		And_Not_Eq,
-		Shl_Eq,
-		Shr_Eq,
-		Cmp_And_Eq,
-		Cmp_Or_Eq,
+		Add_Eq,     // +=
+		Sub_Eq,     // -=
+		Mul_Eq,     // *=
+		Quo_Eq,     // /=
+		Mod_Eq,     // %=
+		Mod_Mod_Eq, // %%=
+		And_Eq,     // &=
+		Or_Eq,      // |=
+		Xor_Eq,     // ~=
+		And_Not_Eq, // &~=
+		Shl_Eq,     // <<=
+		Shr_Eq,     // >>=
+		Cmp_And_Eq, // &&=
+		Cmp_Or_Eq,  // ||=
 	B_Assign_Op_End,
 
-		Arrow_Right,
-		Arrow_Left,
-		Double_Arrow_Right,
-		Undef,
+		Arrow_Right,        // ->
+		Undef,              // ---
 
 	B_Comparison_Begin,
-		Cmp_Eq,
-		Not_Eq,
-		Lt,
-		Gt,
-		Lt_Eq,
-		Gt_Eq,
+		Cmp_Eq, // ==
+		Not_Eq, // !=
+		Lt,     // <
+		Gt,     // >
+		Lt_Eq,  // <=
+		Gt_Eq,  // >=
 	B_Comparison_End,
 
-		Open_Paren,
-		Close_Paren,
-		Open_Bracket,
-		Close_Bracket,
-		Open_Brace,
-		Close_Brace,
-		Colon,
-		Semicolon,
-		Period,
-		Comma,
-		Ellipsis,
-		Range_Half,
-		Back_Slash,
+		Open_Paren,    // (
+		Close_Paren,   // )
+		Open_Bracket,  // [
+		Close_Bracket, // ]
+		Open_Brace,    // {
+		Close_Brace,   // }
+		Colon,         // :
+		Semicolon,     // ;
+		Period,        // .
+		Comma,         // ,
+		Ellipsis,      // ..
+		Range_Half,    // ..<
+		Back_Slash,    // \
 	B_Operator_End,
 
 	B_Keyword_Begin,
-		Import,
-		Foreign,
-		Package,
-		Typeid,
-		When,
-		Where,
-		If,
-		Else,
-		For,
-		Switch,
-		In,
-		Not_In,
-		Do,
-		Case,
-		Break,
-		Continue,
-		Fallthrough,
-		Defer,
-		Return,
-		Proc,
-		Macro,
-		Struct,
-		Union,
-		Enum,
-		Bit_Field,
-		Bit_Set,
-		Map,
-		Dynamic,
-		Auto_Cast,
-		Cast,
-		Transmute,
-		Distinct,
-		Opaque,
-		Using,
-		Inline,
-		No_Inline,
-		Context,
-		Size_Of,
-		Align_Of,
-		Offset_Of,
-		Type_Of,
-		Const,
+		Import,      // import
+		Foreign,     // foreign
+		Package,     // package
+		Typeid,      // typeid
+		When,        // when
+		Where,       // where
+		If,          // if
+		Else,        // else
+		For,         // for
+		Switch,      // switch
+		In,          // in
+		Not_In,      // not_in
+		Do,          // do
+		Case,        // case
+		Break,       // break
+		Continue,    // continue
+		Fallthrough, // fallthrough
+		Defer,       // defer
+		Return,      // return
+		Proc,        // proc
+		Struct,      // struct
+		Union,       // union
+		Enum,        // enum
+		Bit_Set,     // bit_set
+		Map,         // map
+		Dynamic,     // dynamic
+		Auto_Cast,   // auto_cast
+		Cast,        // cast
+		Transmute,   // transmute
+		Distinct,    // distinct
+		Using,       // using
+		Inline,      // inline
+		No_Inline,   // no_inline
+		Context,     // context
+		Asm,         // asm
 	B_Keyword_End,
 
 	COUNT,
@@ -219,8 +210,6 @@ tokens := [Token_Kind.COUNT]string {
 	"",
 
 	"->",
-	"<-",
-	"=>",
 	"---",
 
 	"",
@@ -268,11 +257,9 @@ tokens := [Token_Kind.COUNT]string {
 	"defer",
 	"return",
 	"proc",
-	"macro",
 	"struct",
 	"union",
 	"enum",
-	"bit_field",
 	"bit_set",
 	"map",
 	"dynamic",
@@ -280,20 +267,28 @@ tokens := [Token_Kind.COUNT]string {
 	"cast",
 	"transmute",
 	"distinct",
-	"opaque",
 	"using",
 	"inline",
 	"no_inline",
 	"context",
-	"size_of",
-	"align_of",
-	"offset_of",
-	"type_of",
-	"const",
+	"asm",
 	"",
 };
 
 custom_keyword_tokens: []string;
+
+
+is_newline :: proc(tok: Token) -> bool {
+	return tok.kind == .Semicolon && tok.text == "\n";
+}
+
+
+token_to_string :: proc(tok: Token) -> string {
+	if is_newline(tok) {
+		return "newline";
+	}
+	return to_string(tok.kind);
+}
 
 to_string :: proc(kind: Token_Kind) -> string {
 	if Token_Kind.Invalid <= kind && kind < Token_Kind.COUNT {
@@ -317,6 +312,8 @@ is_operator :: proc(kind: Token_Kind) -> bool {
 	case .B_Operator_Begin .. .B_Operator_End:
 		return true;
 	case .In, .Not_In:
+		return true;
+	case .If:
 		return true;
 	}
 	return false;

@@ -76,7 +76,6 @@ void ir_write_u64(irFileBuffer *f, u64 i) {
 }
 void ir_write_big_int(irFileBuffer *f, BigInt const &x, Type *type, bool swap_endian) {
 	if (x.len == 2) {
-		gbAllocator a = heap_allocator(); // TODO(bill): Change this allocator
 		u64 words[2] = {};
 		BigInt y = x;
 		if (swap_endian) {
@@ -88,9 +87,8 @@ void ir_write_big_int(irFileBuffer *f, BigInt const &x, Type *type, bool swap_en
 			y.d.words = words;
 		}
 
-		String s = big_int_to_string(a, &y, 10);
+		String s = big_int_to_string(temporary_allocator(), &y, 10);
 		ir_write_string(f, s);
-		gb_free(a, s.text);
 	} else {
 		i64 i = 0;
 		if (x.neg) {
@@ -296,7 +294,7 @@ void ir_print_alignment_prefix_hack(irFileBuffer *f, i64 alignment) {
 
 
 void ir_print_proc_results(irFileBuffer *f, irModule *m, Type *t) {
-	set_procedure_abi_types(heap_allocator(), t);
+	set_procedure_abi_types(t);
 
 	GB_ASSERT(is_type_proc(t));
 	t = base_type(t);
@@ -325,7 +323,7 @@ void ir_print_proc_results(irFileBuffer *f, irModule *m, Type *t) {
 
 
 void ir_print_proc_type_without_pointer(irFileBuffer *f, irModule *m, Type *t) {
-	set_procedure_abi_types(heap_allocator(), t);
+	set_procedure_abi_types(t);
 
 	i64 word_bits = 8*build_context.word_size;
 	t = base_type(t);
@@ -637,15 +635,6 @@ void ir_print_type(irFileBuffer *f, irModule *m, Type *t, bool in_struct) {
 		ir_print_type(f, m, t->Map.internal_type);
 		break;
 
-	case Type_BitField: {
-		i64 align = type_align_of(t);
-		i64 size  = type_size_of(t);
-		ir_write_string(f, str_lit("<{"));
-		ir_print_alignment_prefix_hack(f, align);
-		ir_fprintf(f, ", [%lld x i8]}>", size);
-		break;
-	}
-
 	case Type_BitSet: {
 		i64 size = type_size_of(t);
 		if (size == 0) {
@@ -655,10 +644,6 @@ void ir_print_type(irFileBuffer *f, irModule *m, Type *t, bool in_struct) {
 		ir_print_type(f, m, bit_set_to_int(t));
 		return;
 	}
-
-	case Type_Opaque:
-		ir_print_type(f, m, strip_opaque_type(t));
-		return;
 
 	case Type_SimdVector:
 		if (t->SimdVector.is_x86_mmx) {
@@ -736,6 +721,28 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 	if (is_type_array(type) && value.kind == ExactValue_String && !is_type_u8(core_array_type(type))) {
 		i64 count  = type->Array.count;
 		Type *elem = type->Array.elem;
+
+		if (is_type_rune_array(type)) {
+			Rune rune;
+			isize offset = 0;
+			isize width = 1;
+			String s = value.value_string;
+			ir_write_byte(f, '[');
+			for (i64 i = 0; i < count && offset < s.len; i++) {
+				width = gb_utf8_decode(s.text+offset, s.len-offset, &rune);
+				if (i > 0) ir_write_str_lit(f, ", ");
+				ir_print_type(f, m, elem);
+				ir_write_byte(f, ' ');
+				ir_print_exact_value(f, m, exact_value_i64(rune), elem);
+				offset += width;
+			}
+			GB_ASSERT(offset == s.len);
+
+			ir_write_byte(f, ']');
+			return;
+		}
+
+
 		ir_write_byte(f, '[');
 
 		for (i64 i = 0; i < count; i++) {
@@ -747,7 +754,7 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 
 		ir_write_byte(f, ']');
 		return;
-	} else if (is_type_array(type) &&
+	}  else if (is_type_array(type) &&
 	    value.kind != ExactValue_Invalid &&
 	    value.kind != ExactValue_String &&
 	    value.kind != ExactValue_Compound) {
@@ -767,6 +774,11 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 	}
 
 	switch (value.kind) {
+	case ExactValue_Typeid:
+		GB_ASSERT(is_type_typeid(type));
+		ir_write_u64(f, ir_typeid_as_integer(m, value.value_typeid));
+		break;
+
 	case ExactValue_Bool:
 		if (value.value_bool) {
 			ir_write_string(f, are_types_identical(type, t_llvm_bool) ? str_lit("true") : str_lit("1"));
@@ -798,7 +810,11 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 			GB_ASSERT(is_type_array(type));
 			ir_write_str_lit(f, "c\"");
 			ir_print_escape_string(f, str, false, false);
-			ir_write_str_lit(f, "\\00\"");
+			if (type->Array.count == str.len) {
+				ir_write_str_lit(f, "\"");
+			} else {
+				ir_write_str_lit(f, "\\00\"");
+			}
 		} else if (is_type_cstring(t)) {
 			// HACK NOTE(bill): This is a hack but it works because strings are created at the very end
 			// of the .ll file
@@ -812,7 +828,7 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 			ir_write_str_lit(f, ", ");
 			ir_print_type(f, m, t_i32);
 			ir_write_str_lit(f, " 0, i32 0)");
-		}else {
+		} else {
 			// HACK NOTE(bill): This is a hack but it works because strings are created at the very end
 			// of the .ll file
 			irValue *str_array = ir_add_global_string_array(m, str);
@@ -929,9 +945,9 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 		ir_write_byte(f, ' ');
 		ir_write_byte(f, '{');
 		ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_complex.real), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_complex->real), ft);
 		ir_write_str_lit(f, ", "); ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_complex.imag), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_complex->imag), ft);
 		ir_write_byte(f, '}');
 		break;
 	}
@@ -944,13 +960,13 @@ void ir_print_exact_value(irFileBuffer *f, irModule *m, ExactValue value, Type *
 		ir_write_byte(f, ' ');
 		ir_write_byte(f, '{');
 		ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion.imag), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion->imag), ft);
 		ir_write_str_lit(f, ", "); ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion.jmag), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion->jmag), ft);
 		ir_write_str_lit(f, ", "); ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion.kmag), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion->kmag), ft);
 		ir_write_str_lit(f, ", "); ir_print_type(f, m, ft); ir_write_byte(f, ' ');
-		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion.real), ft);
+		ir_print_exact_value(f, m, exact_value_float(value.value_quaternion->real), ft);
 		ir_write_byte(f, '}');
 		break;
 	}
@@ -1406,7 +1422,6 @@ void ir_print_value(irFileBuffer *f, irModule *m, irValue *value, Type *type_hin
 		irValue *line      = value->SourceCodeLocation.line;
 		irValue *column    = value->SourceCodeLocation.column;
 		irValue *procedure = value->SourceCodeLocation.procedure;
-		u64      hash      = value->SourceCodeLocation.hash;
 
 		ir_write_byte(f, '{');
 		ir_print_type(f, m, t_string); ir_write_byte(f, ' '); ir_print_value(f, m, file, t_string);
@@ -1416,8 +1431,6 @@ void ir_print_value(irFileBuffer *f, irModule *m, irValue *value, Type *type_hin
 		ir_print_type(f, m, t_int);    ir_write_byte(f, ' '); ir_print_value(f, m, column, t_int);
 		ir_write_string(f, str_lit(", "));
 		ir_print_type(f, m, t_string); ir_write_byte(f, ' '); ir_print_value(f, m, procedure, t_string);
-		ir_write_string(f, str_lit(", "));
-		ir_print_type(f, m, t_u64);    ir_write_byte(f, ' '); ir_write_u64(f, hash);
 		ir_write_byte(f, '}');
 		break;
 	}
@@ -1434,13 +1447,11 @@ void ir_print_calling_convention(irFileBuffer *f, irModule *m, ProcCallingConven
 	switch (cc) {
 	case ProcCC_Odin:        ir_write_str_lit(f, "");       break;
 	case ProcCC_Contextless: ir_write_str_lit(f, "");       break;
-	case ProcCC_Pure:        ir_write_str_lit(f, "");       break;
 	// case ProcCC_CDecl:       ir_write_str_lit(f, "ccc ");   break;
 	case ProcCC_CDecl:       ir_write_str_lit(f, "");   break;
 	case ProcCC_StdCall:     ir_write_str_lit(f, "cc 64 "); break;
 	case ProcCC_FastCall:    ir_write_str_lit(f, "cc 65 "); break;
 	case ProcCC_None:        ir_write_str_lit(f, "");       break;
-	case ProcCC_PureNone:    ir_write_str_lit(f, "");       break;
 	default: GB_PANIC("unknown calling convention: %d", cc);
 	}
 }
@@ -1551,7 +1562,11 @@ void ir_print_instr(irFileBuffer *f, irModule *m, irValue *value) {
 				break;
 
 			case BuiltinProc_cpu_relax:
-				ir_write_str_lit(f, "call void asm sideeffect \"pause\", \"\"()");
+				if (build_context.metrics.arch == TargetArch_amd64) {
+					ir_write_str_lit(f, "call void asm sideeffect \"pause\", \"\"()");
+				} else {
+					// ir_write_str_lit(f, "call void asm sideeffect \"yield\", \"\"()");
+				}
 				break;
 			default: GB_PANIC("Unknown inline code %d", instr->InlineCode.id); break;
 			}
@@ -2189,7 +2204,7 @@ void ir_print_instr(irFileBuffer *f, irModule *m, irValue *value) {
 		irInstrCall *call = &instr->Call;
 		Type *proc_type = base_type(ir_type(call->value));
 		GB_ASSERT(is_type_proc(proc_type));
-		set_procedure_abi_types(heap_allocator(), proc_type);
+		set_procedure_abi_types(proc_type);
 
 		bool is_c_vararg = proc_type->Proc.c_vararg;
 		Type *result_type = call->type;
@@ -2280,7 +2295,7 @@ void ir_print_instr(irFileBuffer *f, irModule *m, irValue *value) {
 					ir_print_type(f, m, t);
 					ir_write_byte(f, ' ');
 					ir_print_value(f, m, arg, t);
-					param_index++;
+					arg_index++;
 				}
 			} else {
 				// GB_ASSERT(call->args.count == params->variables.count);
@@ -2396,7 +2411,7 @@ void ir_print_instr(irFileBuffer *f, irModule *m, irValue *value) {
 
 
 void ir_print_proc(irFileBuffer *f, irModule *m, irProcedure *proc) {
-	set_procedure_abi_types(heap_allocator(), proc->type);
+	set_procedure_abi_types(proc->type);
 
 	if (proc->body == nullptr) {
 		ir_write_str_lit(f, "declare ");
@@ -2611,7 +2626,6 @@ bool ir_print_global_type_allowed(Type *t) {
 	case Type_DynamicArray:
 	case Type_Map:
 	case Type_Union:
-	case Type_BitField:
 		return false;
 	}
 

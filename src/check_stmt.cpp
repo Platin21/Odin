@@ -15,7 +15,7 @@ bool is_divigering_stmt(Ast *stmt) {
 	return t->kind == Type_Proc && t->Proc.diverging;
 }
 
-void check_stmt_list(CheckerContext *ctx, Array<Ast *> const &stmts, u32 flags) {
+void check_stmt_list(CheckerContext *ctx, Slice<Ast *> const &stmts, u32 flags) {
 	if (stmts.count == 0) {
 		return;
 	}
@@ -78,7 +78,7 @@ void check_stmt_list(CheckerContext *ctx, Array<Ast *> const &stmts, u32 flags) 
 	}
 }
 
-bool check_is_terminating_list(Array<Ast *> const &stmts, String const &label) {
+bool check_is_terminating_list(Slice<Ast *> const &stmts, String const &label) {
 	// Iterate backwards
 	for (isize n = stmts.count-1; n >= 0; n--) {
 		Ast *stmt = stmts[n];
@@ -96,7 +96,7 @@ bool check_is_terminating_list(Array<Ast *> const &stmts, String const &label) {
 	return false;
 }
 
-bool check_has_break_list(Array<Ast *> const &stmts, String const &label, bool implicit) {
+bool check_has_break_list(Slice<Ast *> const &stmts, String const &label, bool implicit) {
 	for_array(i, stmts) {
 		Ast *stmt = stmts[i];
 		if (check_has_break(stmt, label, implicit)) {
@@ -330,17 +330,6 @@ Type *check_assignment_variable(CheckerContext *ctx, Operand *lhs, Operand *rhs)
 		return nullptr;
 
 	case Addressing_Variable:
-		if (is_type_bit_field_value(lhs->type)) {
-			Type *res = check_assignment_bit_field(ctx, rhs, lhs->type);
-			if (res == nullptr) {
-				gbString lhs_expr = expr_to_string(lhs->expr);
-				gbString rhs_expr = expr_to_string(rhs->expr);
-				error(rhs->expr, "Cannot assign '%s' to bit field '%s'", rhs_expr, lhs_expr);
-				gb_string_free(rhs_expr);
-				gb_string_free(lhs_expr);
-			}
-			return res;
-		}
 		break;
 
 	case Addressing_MapIndex: {
@@ -641,8 +630,7 @@ void add_constant_switch_case(CheckerContext *ctx, Map<TypeAndToken> *seen, Oper
 	TypeAndToken *found = map_get(seen, key);
 	if (found != nullptr) {
 		isize count = multi_map_count(seen, key);
-		TypeAndToken *taps = gb_alloc_array(ctx->allocator, TypeAndToken, count);
-		defer (gb_free(ctx->allocator, taps));
+		TypeAndToken *taps = gb_alloc_array(temporary_allocator(), TypeAndToken, count);
 
 		multi_map_get_all(seen, key, taps);
 		for (isize i = 0; i < count; i++) {
@@ -743,11 +731,11 @@ void check_inline_range_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 		if (val0 == nullptr) {
 			gbString s = expr_to_string(operand.expr);
 			gbString t = type_to_string(operand.type);
-			error(operand.expr, "Cannot iterate over '%s' of type '%s' in an 'inline for' statement", s, t);
+			error(operand.expr, "Cannot iterate over '%s' of type '%s' in an '#unroll for' statement", s, t);
 			gb_string_free(t);
 			gb_string_free(s);
 		} else if (operand.mode != Addressing_Constant) {
-			error(operand.expr, "An 'inline for' expression must be known at compile time");
+			error(operand.expr, "An '#unroll for' expression must be known at compile time");
 		}
 	}
 
@@ -805,7 +793,7 @@ void check_inline_range_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 	}
 
 
-	// NOTE(bill): Minimize the amount of nesting of an 'inline for'
+	// NOTE(bill): Minimize the amount of nesting of an '#unroll for'
 	i64 prev_inline_for_depth = ctx->inline_for_depth;
 	defer (ctx->inline_for_depth = prev_inline_for_depth);
 	{
@@ -818,9 +806,9 @@ void check_inline_range_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 
 		if (ctx->inline_for_depth >= MAX_INLINE_FOR_DEPTH && prev_inline_for_depth < MAX_INLINE_FOR_DEPTH) {
 			if (prev_inline_for_depth > 0) {
-				error(node, "Nested 'inline for' loop cannot be inlined as it exceeds the maximum inline for depth (%lld levels >= %lld maximum levels)", v, MAX_INLINE_FOR_DEPTH);
+				error(node, "Nested '#unroll for' loop cannot be inlined as it exceeds the maximum '#unroll for' depth (%lld levels >= %lld maximum levels)", v, MAX_INLINE_FOR_DEPTH);
 			} else {
-				error(node, "'inline for' loop cannot be inlined as it exceeds the maximum inline for depth (%lld levels >= %lld maximum levels)", v, MAX_INLINE_FOR_DEPTH);
+				error(node, "'#unroll for' loop cannot be inlined as it exceeds the maximum '#unroll for' depth (%lld levels >= %lld maximum levels)", v, MAX_INLINE_FOR_DEPTH);
 			}
 			error_line("\tUse a normal 'for' loop instead by removing the 'inline' prefix\n");
 			ctx->inline_for_depth = MAX_INLINE_FOR_DEPTH;
@@ -859,8 +847,7 @@ void check_switch_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 		token.pos    = ast_token(ss->body).pos;
 		token.string = str_lit("true");
 
-		x.expr = gb_alloc_item(ctx->allocator, Ast);
-		x.expr->kind = Ast_Ident;
+		x.expr = alloc_ast_node(nullptr, Ast_Ident);
 		x.expr->Ident.token = token;
 	}
 
@@ -1025,8 +1012,7 @@ void check_switch_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 		GB_ASSERT(is_type_enum(et));
 		auto fields = et->Enum.fields;
 
-		auto unhandled = array_make<Entity *>(ctx->allocator, 0, fields.count);
-		defer (array_free(&unhandled));
+		auto unhandled = array_make<Entity *>(temporary_allocator(), 0, fields.count);
 
 		for_array(i, fields) {
 			Entity *f = fields[i];
@@ -1265,8 +1251,7 @@ void check_type_switch_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags) {
 		GB_ASSERT(is_type_union(ut));
 		auto variants = ut->Union.variants;
 
-		auto unhandled = array_make<Type *>(ctx->allocator, 0, variants.count);
-		defer (array_free(&unhandled));
+		auto unhandled = array_make<Type *>(temporary_allocator(), 0, variants.count);
 
 		for_array(i, variants) {
 			Type *t = variants[i];
@@ -1418,11 +1403,6 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 	case_end;
 
 	case_ast_node(as, AssignStmt, node);
-		if (ctx->curr_proc_calling_convention == ProcCC_Pure) {
-			error(node, "Assignment statements are not allowed within a \"pure\" procedure");
-			// Continue
-		}
-
 		switch (as->op.kind) {
 		case Token_Eq: {
 			// a, b, c = 1, 2, 3;  // Multisided
@@ -1433,12 +1413,11 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 				return;
 			}
 
+
 			// NOTE(bill): If there is a bad syntax error, rhs > lhs which would mean there would need to be
 			// an extra allocation
-			auto lhs_operands = array_make<Operand>(ctx->allocator, lhs_count);
-			auto rhs_operands = array_make<Operand>(ctx->allocator, 0, 2*lhs_count);
-			defer (array_free(&lhs_operands));
-			defer (array_free(&rhs_operands));
+			auto lhs_operands = array_make<Operand>(temporary_allocator(), lhs_count);
+			auto rhs_operands = array_make<Operand>(temporary_allocator(), 0, 2*lhs_count);
 
 			for_array(i, as->lhs) {
 				if (is_blank_ident(as->lhs[i])) {
@@ -1462,8 +1441,7 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 				}
 			}
 
-			auto lhs_to_ignore = array_make<bool>(ctx->allocator, lhs_count);
-			defer (array_free(&lhs_to_ignore));
+			auto lhs_to_ignore = array_make<bool>(temporary_allocator(), lhs_count);
 
 			isize max = gb_min(lhs_count, rhs_count);
 			// NOTE(bill, 2020-05-02): This is an utter hack to get these custom atom operations working
@@ -1642,8 +1620,7 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 		} else if (operands.count != result_count) {
 			error(node, "Expected %td return values, got %td", result_count, operands.count);
 		} else {
-			isize max_count = rs->results.count;
-			for (isize i = 0; i < max_count; i++) {
+			for (isize i = 0; i < result_count; i++) {
 				Entity *e = pt->results->Tuple.variables[i];
 				check_assignment(ctx, &operands[i], e->type, str_lit("return statement"));
 			}
@@ -1810,9 +1787,19 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 			if (val0 == nullptr) {
 				gbString s = expr_to_string(operand.expr);
 				gbString t = type_to_string(operand.type);
+				defer (gb_string_free(s));
+				defer (gb_string_free(t));
+
 				error(operand.expr, "Cannot iterate over '%s' of type '%s'", s, t);
-				gb_string_free(t);
-				gb_string_free(s);
+
+				if (rs->val0 != nullptr && rs->val1 == nullptr) {
+					if (is_type_map(operand.type) || is_type_bit_set(operand.type)) {
+						gbString v = expr_to_string(rs->val0);
+						defer (gb_string_free(v));
+						error_line("\tSuggestion: place parentheses around the expression\n");
+						error_line("\t            for (%s in %s) {\n", v, s);
+					}
+				}
 			}
 		}
 
@@ -1878,7 +1865,7 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 			DeclInfo *d = decl_info_of_entity(e);
 			GB_ASSERT(d == nullptr);
 			add_entity(ctx->checker, ctx->scope, e->identifier, e);
-			d = make_decl_info(ctx->allocator, ctx->scope, ctx->decl);
+			d = make_decl_info(ctx->scope, ctx->decl);
 			add_entity_and_decl_info(ctx, e->identifier, e, d);
 		}
 
@@ -2036,7 +2023,7 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 
 	case_ast_node(vd, ValueDecl, node);
 		if (vd->is_mutable) {
-			Entity **entities = gb_alloc_array(ctx->allocator, Entity *, vd->names.count);
+			Entity **entities = gb_alloc_array(permanent_allocator(), Entity *, vd->names.count);
 			isize entity_count = 0;
 
 			isize new_name_count = 0;
@@ -2149,12 +2136,6 @@ void check_stmt_internal(CheckerContext *ctx, Ast *node, u32 flags) {
 
 			check_init_variables(ctx, entities, entity_count, vd->values, str_lit("variable declaration"));
 			check_arity_match(ctx, vd, false);
-
-			if (ctx->curr_proc_calling_convention == ProcCC_Pure) {
-				if (vd->values.count == 0) {
-					error(node, "Variable declarations without assignment are not allowed within \"pure\" procedures");
-				}
-			}
 
 			for (isize i = 0; i < entity_count; i++) {
 				Entity *e = entities[i];
